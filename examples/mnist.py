@@ -321,40 +321,37 @@ def update(params: hk.Params,
   return new_params, new_opt_state
 
 
-MNIST_IMAGE_SHAPE = (28, 28, 1)
-cond_info_shape = (10,1)
-batch_size = 128
+if __name__ == "__main__":
+  MNIST_IMAGE_SHAPE = (28, 28, 1)
+  cond_info_shape = (10,1)
+  batch_size = 128
 
-flow_num_layers = 10
-mlp_num_layers = 4
-hidden_size = 500
-num_bins = 4
-learning_rate = 1e-4
+  flow_num_layers = 10
+  mlp_num_layers = 4
+  hidden_size = 500
+  num_bins = 4
+  learning_rate = 1e-4
 
-# using 100,000 steps could take long (about 2 hours) but will give better results. 
-# You can try with 10,000 steps to run it fast but result may not be very good
+  training_steps =  1#000
+  eval_frequency =  100
 
-training_steps =  5000
-eval_frequency =  100
+  optimizer = optax.adam(learning_rate)
 
-optimizer = optax.adam(learning_rate)
+  # Training
+  prng_seq = hk.PRNGSequence(42)
+  params = log_prob.init(next(prng_seq), 
+                      np.zeros((1, *MNIST_IMAGE_SHAPE)), 
+                      np.zeros((1, *cond_info_shape)))
+  opt_state = optimizer.init(params)
 
-# Training
-prng_seq = hk.PRNGSequence(42)
-params = log_prob.init(next(prng_seq), 
-                    np.zeros((1, *MNIST_IMAGE_SHAPE)), 
-                    np.zeros((1, *cond_info_shape)))
-opt_state = optimizer.init(params)
+  train_ds = load_dataset(tfds.Split.TRAIN, batch_size)
+  valid_ds = load_dataset(tfds.Split.TEST, batch_size)
 
-train_ds = load_dataset(tfds.Split.TRAIN, batch_size)
-valid_ds = load_dataset(tfds.Split.TEST, batch_size)
+  for step in range(training_steps):
+    params, opt_state = update(params, next(prng_seq), opt_state,
+                                next(train_ds))
 
-for step in range(training_steps):
-  params, opt_state = update(params, next(prng_seq), opt_state,
-                              next(train_ds))
-
-  if step % eval_frequency == 0:
-    val_loss = eval_fn(params, next(valid_ds))
-    print(f"STEP: {step:5d}; Validation loss: {val_loss:.3f}")
-
+    if step % eval_frequency == 0:
+      val_loss = eval_fn(params, next(valid_ds))
+      print(f"STEP: {step:5d}; Validation loss: {val_loss:.3f}")
 

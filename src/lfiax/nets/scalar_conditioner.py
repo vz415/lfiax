@@ -9,7 +9,7 @@ import haiku as hk
 from typing import Any, Iterator, Mapping, Optional, Sequence, Tuple, Callable, Union
 
 
-def scalar_conditioner(event_shape: Sequence[int],
+def scalar_conditioner_mlp(event_shape: Sequence[int],
                       cond_info_shape: Sequence[int],
                       hidden_sizes: Sequence[int],
                       num_bijector_params: int) -> hk.Module: # Is this correct?

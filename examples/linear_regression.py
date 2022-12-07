@@ -162,9 +162,9 @@ if __name__ == "__main__":
     seed = 1231
     key = jrandom.PRNGKey(seed)
 
-    # d = jnp.array([-10.,0., 5., 10.])
+    d = jnp.array([-10.,0., 5., 10.])
     # d = jnp.array([1., 2.])
-    d = jnp.array([1.])
+    # d = jnp.array([1.])
     num_samples = 100
 
     # Params and hyperparams
