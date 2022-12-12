@@ -92,7 +92,6 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
       x = jnp.expand_dims(data[:, :-2], -1)
   x = data[:, :-2]
   thetas = data[:, -2:]
-  # thetas = (thetas - thetas.mean(axis=0)) / thetas.std(axis=0)
   return x, thetas
 
 # ----------------------------
@@ -104,8 +103,6 @@ def log_prob(data: Array, cond_data: Array) -> Array:
   # Get batch 
   shift = data.mean(axis=0)
   scale = data.std(axis=0) + 1e-14
-  # jax.debug.print("{scale}", scale=scale)
-  # jax.debug.print("{shift}", shift=shift)
   
   model = make_nsf(
       event_shape=EVENT_SHAPE,
@@ -113,6 +110,7 @@ def log_prob(data: Array, cond_data: Array) -> Array:
       num_layers=flow_num_layers,
       hidden_sizes=[hidden_size] * mlp_num_layers,
       num_bins=num_bins,
+      standardize=True,
       shift=shift,
       scale=scale)
   return model.log_prob(data, cond_data)
@@ -162,9 +160,9 @@ if __name__ == "__main__":
     seed = 1231
     key = jrandom.PRNGKey(seed)
 
-    d = jnp.array([-10.,0., 5., 10.])
+    # d = jnp.array([-10.,0., 5., 10.])
     # d = jnp.array([1., 2.])
-    # d = jnp.array([1.])
+    d = jnp.array([1.])
     num_samples = 100
 
     # Params and hyperparams
