@@ -27,6 +27,7 @@ def make_nsf(event_shape: Sequence[int],
               hidden_sizes: Sequence[int],
               num_bins: int,
               standardize: bool,
+              event_dim: int = None,
               shift: float = None,
               scale: float = None,
               base_dist: str = 'gaussian',
@@ -54,14 +55,17 @@ def make_nsf(event_shape: Sequence[int],
   # Starting with a standardizing layer - might want to put at end
   if standardize:
     layers = [
-      # TODO: Auto-select dimensionality of ConditonalBlock - only works for 1D linear regression
-      ConditionalInverse(ConditionalBlock(StandardizingBijector(shift, scale), 1))
+      # TODO: Check that event_dim is implemented correctly
+      ConditionalInverse(
+        ConditionalBlock(
+          StandardizingBijector(shift, scale), 
+          event_dim))
     ]
   else:
     layers = []
   
   if event_shape == (1,):
-    # TODO: assert conditioner is a scalar
+    # TODO: assert conditioner is a scalar by simulating output
     conditioner = scalar_conditioner_mlp(event_shape,
                                       cond_info_shape,
                                       hidden_sizes,

@@ -111,6 +111,7 @@ def log_prob(data: Array, cond_data: Array) -> Array:
       hidden_sizes=[hidden_size] * mlp_num_layers,
       num_bins=num_bins,
       standardize=True,
+      event_dim=EVENT_DIM,
       shift=shift,
       scale=scale)
   return model.log_prob(data, cond_data)
@@ -160,14 +161,16 @@ if __name__ == "__main__":
     seed = 1231
     key = jrandom.PRNGKey(seed)
 
-    # d = jnp.array([-10.,0., 5., 10.])
+    d = jnp.array([-10.,0., 5., 10.])
     # d = jnp.array([1., 2.])
-    d = jnp.array([1.])
+    # d = jnp.array([1.])
     num_samples = 100
 
     # Params and hyperparams
     theta_shape = (2,)
-    EVENT_SHAPE = (len(d),) 
+    EVENT_SHAPE = (len(d),)
+    # TODO: way to infer event_ndim automatically?
+    EVENT_DIM = 1
     cond_info_shape = theta_shape
 
     batch_size = 128

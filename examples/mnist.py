@@ -51,6 +51,10 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
 @hk.without_apply_rng
 @hk.transform
 def log_prob(data: Array, cond_data: Array) -> Array:
+  # Get batch 
+  shift = data.mean(axis=0)
+  scale = data.std(axis=0) + 1e-14
+  
   model = make_nsf(
       event_shape=MNIST_IMAGE_SHAPE,
       cond_info_shape=cond_info_shape,
@@ -71,7 +75,7 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
       num_layers=flow_num_layers,
       hidden_sizes=[hidden_size] * mlp_num_layers,
       num_bins=num_bins,
-      standardize=False,
+      standardize=True,
       base_dist='uniform',
       )
   z = jnp.repeat(cond_data, num_samples, axis=0)
@@ -106,6 +110,8 @@ def update(params: hk.Params,
 
 if __name__ == "__main__":
   MNIST_IMAGE_SHAPE = (28, 28, 1)
+  # Test code to test standardizing module
+  EVENT_DIM = len(MNIST_IMAGE_SHAPE)
   cond_info_shape = (10,1)
   batch_size = 128
 
