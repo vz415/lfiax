@@ -31,9 +31,9 @@ def make_nsf(event_shape: Sequence[int],
               shift: float = None,
               scale: float = None,
               base_dist: str = 'gaussian',
-              # embedding_net: nn.Module = nn.Identity(),
               ) -> distrax.Transformed:
-  """Creates the flow model."""
+  """Creates a neural spline flow model using conditional 
+  bijectors and distributions."""
   # Alternating binary mask.
   mask = jnp.arange(0, np.prod(event_shape)) % 2
   mask = jnp.reshape(mask, event_shape)
@@ -43,7 +43,7 @@ def make_nsf(event_shape: Sequence[int],
 
   def bijector_fn(params: Array):
     return distrax.RationalQuadraticSpline(
-        params, range_min=0., range_max=1.)
+      params, range_min=0., range_max=1.)
 
   # Number of parameters for the rational-quadratic spline:
   # - `num_bins` bin widths
@@ -55,7 +55,6 @@ def make_nsf(event_shape: Sequence[int],
   # Starting with a standardizing layer - might want to put at end
   if standardize:
     layers = [
-      # TODO: Check that event_dim is implemented correctly
       ConditionalInverse(
         ConditionalBlock(
           StandardizingBijector(shift, scale), 
@@ -65,13 +64,11 @@ def make_nsf(event_shape: Sequence[int],
     layers = []
   
   if event_shape == (1,):
-    # TODO: assert conditioner is a scalar by simulating output
     conditioner = scalar_conditioner_mlp(event_shape,
                                       cond_info_shape,
                                       hidden_sizes,
                                       num_bijector_params)
   else:
-    # TODO: assert conditioner is non-scalar
     conditioner = conditioner_mlp(event_shape,
                                       cond_info_shape,
                                       hidden_sizes,
@@ -79,23 +76,19 @@ def make_nsf(event_shape: Sequence[int],
 
   # Append subsequent layers
   for _ in range(num_layers):
-    # Could use better logic on what type of conditioner to make based on event_shape.
     layer = MaskedConditionalCoupling(
         mask=mask,
         bijector=bijector_fn,
         conditioner=conditioner,)
-        # event_ndims=event_shape[0])
     layers.append(layer)
-    # Flip the mask after each layer as long as non-scalar.
+    # Flip the mask after each layer as long as event is non-scalar.
     if event_shape != (1,):
         mask = jnp.logical_not(mask)
   
   # We invert the flow so that the `forward` method is called with `log_prob`.
   flow = ConditionalInverse(ConditionalChain(layers))
   
-  # TODO: Make base distribution customizable
   if base_dist == 'gaussian':
-    # Making base a Gaussian.
     mu = jnp.zeros(event_shape)
     sigma = jnp.ones(event_shape)
     base_distribution = distrax.Independent(
@@ -106,7 +99,6 @@ def make_nsf(event_shape: Sequence[int],
             low=jnp.zeros(event_shape),
             high=jnp.ones(event_shape)),
         reinterpreted_batch_ndims=len(event_shape))
-  # TODO: Make specification of distributions more customizable
-  else: raise AssertionError('Specified non-implemented distribution')
+  else: raise AssertionError('Specified non-implemented distribution.')
   
   return ConditionalTransformed(base_distribution, flow)
