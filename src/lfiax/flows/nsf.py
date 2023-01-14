@@ -30,6 +30,7 @@ def make_nsf(
     num_bins: int,
     standardize_x: bool,
     standardize_z: bool = False,
+    use_resnet: bool = True,
     event_dim: int = None,
     shift: float = None,
     scale: float = None,
@@ -73,6 +74,7 @@ def make_nsf(
             hidden_sizes,
             num_bijector_params,
             standardize_z,
+            use_resnet,
         )
     else:
         conditioner = conditioner_mlp(
@@ -81,6 +83,7 @@ def make_nsf(
             hidden_sizes,
             num_bijector_params,
             standardize_z,
+            use_resnet,
         )
 
     # Append subsequent layers

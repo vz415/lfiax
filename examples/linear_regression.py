@@ -117,6 +117,7 @@ def log_prob(data: Array, cond_data: Array) -> Array:
         num_bins=num_bins,
         standardize_x=True,
         standardize_z=True,
+        use_resnet=True,
         event_dim=EVENT_DIM,
         shift=shift,
         scale=scale,
@@ -165,6 +166,7 @@ def update(
 
 
 if __name__ == "__main__":
+    # TODO: Put this in hydra config file
     seed = 1231
     key = jrandom.PRNGKey(seed)
 

@@ -13,6 +13,7 @@ def scalar_conditioner_mlp(
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
     standardize_z: bool = False,
+    resnet: bool = True,
 ) -> hk.Module:
     class ConditionerModule(hk.Module):
         def __call__(self, z):
@@ -20,7 +21,12 @@ def scalar_conditioner_mlp(
             if standardize_z:
                 z = (z - z.mean(axis=0)) / (z.std(axis=0) + 1e-14)
             z = hk.Flatten(preserve_dims=-len(cond_info_shape))(z)
-            z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
+            if resnet:
+                # for hidden in hidden_sizes:
+                    # z += hk.nets.MLP(hidden_sizes, activate_final=True)(z)
+                z += hk.nets.MLP(hidden_sizes, activate_final=True)(z)
+            else:
+                z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
             z = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
                 w_init=jnp.zeros,
