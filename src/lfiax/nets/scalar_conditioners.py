@@ -22,9 +22,9 @@ def scalar_conditioner_mlp(
                 z = (z - z.mean(axis=0)) / (z.std(axis=0) + 1e-14)
             z = hk.Flatten(preserve_dims=-len(cond_info_shape))(z)
             if resnet:
-                # for hidden in hidden_sizes:
-                    # z += hk.nets.MLP(hidden_sizes, activate_final=True)(z)
-                z += hk.nets.MLP(hidden_sizes, activate_final=True)(z)
+                for hidden in hidden_sizes:
+                    z = hk.nets.MLP([hidden], activate_final=True)(z)
+                    z += hk.Linear(hidden)(hk.Flatten()(z))
             else:
                 z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
             z = hk.Linear(

@@ -84,6 +84,7 @@ def sim_data(d: Array, priors: Array, key: PRNGKey):
 
     priors = base_distribution.sample(seed=keys[0], sample_shape=[num_samples])
 
+    # ygrads allows to be compared to other implementations (Kleinegesse et al.)
     y, ygrads = sim_linear_jax(d, priors, keys[1])
 
     return jnp.column_stack((y.T, jnp.squeeze(priors)))

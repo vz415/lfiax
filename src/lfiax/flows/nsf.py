@@ -14,8 +14,8 @@ from lfiax.bijectors.standardizing_conditional import StandardizingBijector
 
 from lfiax.distributions.transformed_conditional import ConditionalTransformed
 
-from lfiax.nets.scalar_conditioner import scalar_conditioner_mlp
-from lfiax.nets.conditioner import conditioner_mlp
+from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp
+from lfiax.nets.conditioners import conditioner_mlp
 
 
 Array = jnp.ndarray

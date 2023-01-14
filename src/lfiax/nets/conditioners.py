@@ -13,7 +13,7 @@ def conditioner_mlp(
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
     standardize_z: bool = False,
-    resnet: bool = True,
+    resnet: bool = False,
 ) -> hk.Module:
     class ConditionerModule(hk.Module):
         def __call__(self, x, z):
@@ -25,9 +25,9 @@ def conditioner_mlp(
             z = hk.Flatten(preserve_dims=-len(cond_info_shape))(z)
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
-                # for hidden in hidden_sizes:
-                #     x += hk.nets.MLP(hidden, activate_final=True)(x)
-                x += hk.nets.MLP(hidden_sizes, activate_final=True)(x)
+                for hidden in hidden_sizes:
+                    x = hk.nets.MLP([hidden], activate_final=True)(x)
+                    x += hk.Linear(hidden)(hk.Flatten()(x))
             else:
                 x = hk.nets.MLP(hidden_sizes, activate_final=True)(x)
             x = hk.Linear(
