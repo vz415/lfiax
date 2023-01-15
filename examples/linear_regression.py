@@ -99,10 +99,10 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     # Use known length of x to split up the cond_data
     data_shape = data.shape
     start = [0, 0]
-    # print(type(len_x))
     stop = [data_shape[0], len_x]
     x = lax.dynamic_slice(data, start, stop)
     cond_data = data[:, len_x:]
+    # breakpoint()
     return x, cond_data
 
 
@@ -115,7 +115,7 @@ def log_prob(data: Array, cond_data: Array) -> Array:
     # Get batch
     shift = data.mean(axis=0)
     scale = data.std(axis=0) + 1e-14
-
+    
     model = make_nsf(
         event_shape=EVENT_SHAPE,
         cond_info_shape=cond_info_shape,
@@ -155,20 +155,17 @@ def loss_fn(params: hk.Params, prng_key: PRNGKey, batch: Batch) -> Array:
 
 
 @jax.jit
-def eval_fn(params: hk.Params, batch: Batch, len_x: int) -> Array:
+def eval_fn(params: hk.Params, batch: Batch) -> Array:
     x, cond_data = prepare_data(batch)
     loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
-@jax.jit#(static_argnums=(4,))
+@jax.jit
 def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    # len_x = jnp.array(len_x).astype(int)
-    # x, cond_data = prepare_data(batch, len_x)
-    # grads = jax.grad(loss_fn)(params, prng_key, x, cond_data)
     grads = jax.grad(loss_fn)(params, prng_key, batch)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
@@ -180,17 +177,18 @@ if __name__ == "__main__":
     seed = 1231
     key = jrandom.PRNGKey(seed)
 
-    d = jnp.array([-10.0, 0.0, 5.0, 10.0])
+    # d = jnp.array([-10.0, 0.0, 5.0, 10.0])
     # d = jnp.array([1., 2.])
-    # d = jnp.array([1.])
+    d = jnp.array([1.])
     len_x = len(d)
     num_samples = 100
 
     # Params and hyperparams
     theta_shape = (2,)
     EVENT_SHAPE = (len(d),)
+    # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
-    cond_info_shape = theta_shape
+    cond_info_shape = (theta_shape[0] + len(d),)
 
     batch_size = 128
     flow_num_layers = 10

@@ -23,6 +23,7 @@ def conditioner_mlp(
                 z = (z - z.mean(axis=0)) / (z.std(axis=0) + 1e-14)
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
             z = hk.Flatten(preserve_dims=-len(cond_info_shape))(z)
+            # breakpoint()
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
                 for hidden in hidden_sizes:
