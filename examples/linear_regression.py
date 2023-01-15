@@ -84,20 +84,26 @@ def sim_data(d: Array, priors: Array, key: PRNGKey):
 
     priors = base_distribution.sample(seed=keys[0], sample_shape=[num_samples])
 
-    # ygrads allows to be compared to other implementations (Kleinegesse et al.)
+    # ygrads allows to be compared to other implementations (Kleinegesse et)
     y, ygrads = sim_linear_jax(d, priors, keys[1])
 
-    return jnp.column_stack((y.T, jnp.squeeze(priors)))
+    return jnp.column_stack((y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d)))))
 
 
 def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
+    # Batch is [y, thetas, d]
     data = batch.astype(np.float32)
     # Handling the scalar case
     if data.shape[1] <= 3:
         x = jnp.expand_dims(data[:, :-2], -1)
-    x = data[:, :-2]
-    thetas = data[:, -2:]
-    return x, thetas
+    # Use known length of x to split up the cond_data
+    data_shape = data.shape
+    start = [0, 0]
+    # print(type(len_x))
+    stop = [data_shape[0], len_x]
+    x = lax.dynamic_slice(data, start, stop)
+    cond_data = data[:, len_x:]
+    return x, cond_data
 
 
 # ----------------------------
@@ -142,24 +148,27 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
 
 
 def loss_fn(params: hk.Params, prng_key: PRNGKey, batch: Batch) -> Array:
-    x, thetas = prepare_data(batch, prng_key)
+    x, cond_data = prepare_data(batch, prng_key)
     # Loss is average negative log likelihood.
-    loss = -jnp.mean(log_prob.apply(params, x, thetas))
+    loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
 @jax.jit
-def eval_fn(params: hk.Params, batch: Batch) -> Array:
-    x, thetas = prepare_data(batch)
-    loss = -jnp.mean(log_prob.apply(params, x, thetas))
+def eval_fn(params: hk.Params, batch: Batch, len_x: int) -> Array:
+    x, cond_data = prepare_data(batch)
+    loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
-@jax.jit
+@jax.jit#(static_argnums=(4,))
 def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
+    # len_x = jnp.array(len_x).astype(int)
+    # x, cond_data = prepare_data(batch, len_x)
+    # grads = jax.grad(loss_fn)(params, prng_key, x, cond_data)
     grads = jax.grad(loss_fn)(params, prng_key, batch)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
@@ -174,6 +183,7 @@ if __name__ == "__main__":
     d = jnp.array([-10.0, 0.0, 5.0, 10.0])
     # d = jnp.array([1., 2.])
     # d = jnp.array([1.])
+    len_x = len(d)
     num_samples = 100
 
     # Params and hyperparams
