@@ -102,7 +102,6 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     stop = [data_shape[0], len_x]
     x = lax.dynamic_slice(data, start, stop)
     cond_data = data[:, len_x:]
-    # breakpoint()
     return x, cond_data
 
 
@@ -147,8 +146,8 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
     return model._sample_n(key=key, n=[num_samples], z=z)
 
 
-def loss_fn(params: hk.Params, prng_key: PRNGKey, batch: Batch) -> Array:
-    x, cond_data = prepare_data(batch, prng_key)
+def loss_fn(params: hk.Params, prng_key: PRNGKey, x: Array, cond_data: Array) -> Array:
+    # x, cond_data = prepare_data(batch, prng_key)
     # Loss is average negative log likelihood.
     loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
@@ -166,7 +165,9 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    grads = jax.grad(loss_fn)(params, prng_key, batch)
+    x, cond_data = prepare_data(batch, prng_key)
+    grads = jax.grad(loss_fn)(params, prng_key, x, cond_data)
+    grads_d = jax.grad(loss_fn, argnums=3)(params, prng_key, x, cond_data)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state
@@ -179,7 +180,10 @@ if __name__ == "__main__":
 
     # d = jnp.array([-10.0, 0.0, 5.0, 10.0])
     # d = jnp.array([1., 2.])
-    d = jnp.array([1.])
+    # d = jnp.array([1.])
+    d_obs = jnp.array([1.])
+    d_prop = jrandom.uniform(key, shape=(1,), minval=-10., maxval=10.)
+    d = jnp.concatenate((d_obs, d_prop), axis=0)
     len_x = len(d)
     num_samples = 100
 
@@ -204,6 +208,7 @@ if __name__ == "__main__":
 
     # Simulating the data to be used to train the flow.
     num_samples = 10000
+    # TODO: put this function in training since d will be changing.
     X = sim_data(d, num_samples, key)
 
     # Create tf dataset from sklearn dataset
