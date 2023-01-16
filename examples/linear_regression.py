@@ -95,14 +95,20 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     data = batch.astype(np.float32)
     # Handling the scalar case
     if data.shape[1] <= 3:
-        x = jnp.expand_dims(data[:, :-2], -1)
+        y = jnp.expand_dims(data[:, :-2], -1)
     # Use known length of x to split up the cond_data
-    data_shape = data.shape
-    start = [0, 0]
-    stop = [data_shape[0], len_x]
-    x = lax.dynamic_slice(data, start, stop)
+    # data_shape = data.shape
+    # start = [0, 0]
+    # stop = [data_shape[0], len_x]
+    # y = lax.dynamic_slice(data, start, stop)
+    y = data[:, :len_x]
     cond_data = data[:, len_x:]
-    return x, cond_data
+    theta = cond_data[:, :-len_x]
+    x = cond_data[:, -len_x:-len_xi]
+    xi = cond_data[:, -len_xi:]
+    # return x, cond_data
+    # breakpoint()
+    return y, theta, x, xi
 
 
 # ----------------------------
@@ -146,17 +152,21 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
     return model._sample_n(key=key, n=[num_samples], z=z)
 
 
-def loss_fn(params: hk.Params, prng_key: PRNGKey, x: Array, cond_data: Array) -> Array:
+def loss_fn(params: hk.Params, prng_key: PRNGKey, y: Array, theta: Array, x: Array, xi: Array) -> Array:
     # x, cond_data = prepare_data(batch, prng_key)
+    # I wonder if this will work...
+    cond_data = jnp.concatenate((theta, x, xi), axis=1)
     # Loss is average negative log likelihood.
-    loss = -jnp.mean(log_prob.apply(params, x, cond_data))
+    loss = -jnp.mean(log_prob.apply(params, y, cond_data))
     return loss
 
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
-    x, cond_data = prepare_data(batch)
-    loss = -jnp.mean(log_prob.apply(params, x, cond_data))
+    y, theta, x, xi = prepare_data(batch)
+    cond_data = jnp.concatenate((theta, x, xi), axis=1)
+    # loss = -jnp.mean(log_prob.apply(params, x, cond_data))
+    loss = -jnp.mean(log_prob.apply(params, y, cond_data))
     return loss
 
 
@@ -165,9 +175,10 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    x, cond_data = prepare_data(batch, prng_key)
-    grads = jax.grad(loss_fn)(params, prng_key, x, cond_data)
-    grads_d = jax.grad(loss_fn, argnums=3)(params, prng_key, x, cond_data)
+    # x, cond_data = prepare_data(batch, prng_key)
+    y, theta, x, xi = prepare_data(batch)
+    grads = jax.grad(loss_fn)(params, prng_key, y, theta, x, xi)
+    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, y, theta, x, xi)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state
@@ -184,7 +195,8 @@ if __name__ == "__main__":
     d_obs = jnp.array([1.])
     d_prop = jrandom.uniform(key, shape=(1,), minval=-10., maxval=10.)
     d = jnp.concatenate((d_obs, d_prop), axis=0)
-    len_x = len(d)
+    len_x = len(d_obs) + len(d_prop)
+    len_xi = len(d_prop)
     num_samples = 100
 
     # Params and hyperparams
@@ -232,7 +244,7 @@ if __name__ == "__main__":
     opt_state = optimizer.init(params)
 
     for step in range(training_steps):
-        params, opt_state = update(params, next(prng_seq), opt_state, next(train_ds))
+        params, opt_state, grads_d = update(params, next(prng_seq), opt_state, next(train_ds))
 
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
