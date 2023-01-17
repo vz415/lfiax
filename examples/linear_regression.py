@@ -95,20 +95,21 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     data = batch.astype(np.float32)
     # Handling the scalar case
     if data.shape[1] <= 3:
-        y = jnp.expand_dims(data[:, :-2], -1)
+        x = jnp.expand_dims(data[:, :-2], -1)
     # Use known length of x to split up the cond_data
     # data_shape = data.shape
     # start = [0, 0]
     # stop = [data_shape[0], len_x]
     # y = lax.dynamic_slice(data, start, stop)
-    y = data[:, :len_x]
+    x = data[:, :len_x]
     cond_data = data[:, len_x:]
     theta = cond_data[:, :-len_x]
-    x = cond_data[:, -len_x:-len_xi]
+    d = cond_data[:, -len_x:-len_xi]
     xi = cond_data[:, -len_xi:]
     # return x, cond_data
     # breakpoint()
-    return y, theta, x, xi
+    # return y, theta, x, xi
+    return x, theta, d, xi
 
 
 # ----------------------------
@@ -116,7 +117,7 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
 # ----------------------------
 @hk.without_apply_rng
 @hk.transform
-def log_prob(data: Array, cond_data: Array) -> Array:
+def log_prob(data: Array, theta: Array, d: Array, xi: Array) -> Array:
     # Get batch
     shift = data.mean(axis=0)
     scale = data.std(axis=0) + 1e-14
@@ -128,18 +129,19 @@ def log_prob(data: Array, cond_data: Array) -> Array:
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
         standardize_x=True,
-        standardize_z=True,
+        standardize_theta=False,
         use_resnet=True,
         event_dim=EVENT_DIM,
         shift=shift,
         scale=scale,
     )
-    return model.log_prob(data, cond_data)
+    return model.log_prob(data, theta, d, xi)
 
 
 @hk.without_apply_rng
 @hk.transform
 def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
+    # TODO: update this method?
     model = make_nsf(
         event_shape=EVENT_SHAPE,
         cond_info_shape=cond_info_shape,
@@ -152,21 +154,22 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
     return model._sample_n(key=key, n=[num_samples], z=z)
 
 
-def loss_fn(params: hk.Params, prng_key: PRNGKey, y: Array, theta: Array, x: Array, xi: Array) -> Array:
+def loss_fn(params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array, xi: Array) -> Array:
     # x, cond_data = prepare_data(batch, prng_key)
     # I wonder if this will work...
-    cond_data = jnp.concatenate((theta, x, xi), axis=1)
+    # cond_data = jnp.concatenate((theta, d, xi), axis=1)
     # Loss is average negative log likelihood.
-    loss = -jnp.mean(log_prob.apply(params, y, cond_data))
+    loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
+    # loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
-    y, theta, x, xi = prepare_data(batch)
-    cond_data = jnp.concatenate((theta, x, xi), axis=1)
+    x, theta, d, xi = prepare_data(batch)
+    # cond_data = jnp.concatenate((theta, d, xi), axis=1)
+    loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
     # loss = -jnp.mean(log_prob.apply(params, x, cond_data))
-    loss = -jnp.mean(log_prob.apply(params, y, cond_data))
     return loss
 
 
@@ -176,12 +179,12 @@ def update(
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
     # x, cond_data = prepare_data(batch, prng_key)
-    y, theta, x, xi = prepare_data(batch)
-    grads = jax.grad(loss_fn)(params, prng_key, y, theta, x, xi)
-    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, y, theta, x, xi)
+    x, theta, d, xi = prepare_data(batch)
+    grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
+    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state
+    return new_params, new_opt_state, grads_d
 
 
 if __name__ == "__main__":
@@ -194,17 +197,20 @@ if __name__ == "__main__":
     # d = jnp.array([1.])
     d_obs = jnp.array([1.])
     d_prop = jrandom.uniform(key, shape=(1,), minval=-10., maxval=10.)
-    d = jnp.concatenate((d_obs, d_prop), axis=0)
-    len_x = len(d_obs) + len(d_prop)
+    d_sim = jnp.concatenate((d_obs, d_prop), axis=0)
+    len_x = len(d_sim)
+    len_d = len(d_obs)
     len_xi = len(d_prop)
     num_samples = 100
 
     # Params and hyperparams
     theta_shape = (2,)
-    EVENT_SHAPE = (len(d),)
+    d_shape = (len(d_obs),)
+    xi_shape = (len_xi, )
+    EVENT_SHAPE = (len(d_sim),)
     # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
-    cond_info_shape = (theta_shape[0] + len(d),)
+    cond_info_shape = (theta_shape[0], len_d, len_xi)
 
     batch_size = 128
     flow_num_layers = 10
@@ -221,7 +227,7 @@ if __name__ == "__main__":
     # Simulating the data to be used to train the flow.
     num_samples = 10000
     # TODO: put this function in training since d will be changing.
-    X = sim_data(d, num_samples, key)
+    X = sim_data(d_sim, num_samples, key)
 
     # Create tf dataset from sklearn dataset
     dataset = tf.data.Dataset.from_tensor_slices(X)
@@ -233,14 +239,17 @@ if __name__ == "__main__":
     # load_dataset(split: tfds.Split, batch_size: int)
     train_ds = load_dataset(train, 512)
     valid_ds = load_dataset(val, 512)
-
+    
     # Training
     prng_seq = hk.PRNGSequence(42)
     params = log_prob.init(
         next(prng_seq),
         np.zeros((1, *EVENT_SHAPE)),
-        np.zeros((1, *cond_info_shape)),
+        np.zeros((1, *theta_shape)),
+        np.zeros((1, *d_shape)),
+        np.zeros((1, *xi_shape)),
     )
+    # log_prob.init(next(prng_seq), np.zeros((1, *EVENT_SHAPE)), np.zeros((1, *theta_shape)), np.zeros((1, *d_shape)), np.zeros((1, *xi_shape)),)
     opt_state = optimizer.init(params)
 
     for step in range(training_steps):

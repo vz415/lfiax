@@ -36,15 +36,16 @@ class MaskedConditionalCoupling(MaskedCoupling):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def forward_and_log_det(self, x: Array, z: Array) -> Tuple[Array, Array]:
+    def forward_and_log_det(self, x: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
         """Computes y = f(x|z) and log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
         masked_x = jnp.where(self._event_mask, x, 0.0)
         # TODO: Better logic to detect when scalar x
         if masked_x.shape[1] == 1:
-            params = self._conditioner(z)
+            params = self._conditioner(theta, d, xi)
         else:
-            params = self._conditioner(masked_x, z)
+            # breakpoint()
+            params = self._conditioner(masked_x, theta, d, xi)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
         y = jnp.where(self._event_mask, x, y0)
         logdet = math.sum_last(
@@ -53,15 +54,15 @@ class MaskedConditionalCoupling(MaskedCoupling):
         )
         return y, logdet
 
-    def inverse_and_log_det(self, y: Array, z: Array) -> Tuple[Array, Array]:
+    def inverse_and_log_det(self, y: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y|z) and log|det J(f^{-1})(y|z)|."""
         self._check_inverse_input_shape(y)
         masked_y = jnp.where(self._event_mask, y, 0.0)
         # TODO: Better logic to detect when scalar y
         if masked_y.shape[1] == 1:
-            params = self._conditioner(z)
+            params = self._conditioner(theta, d, xi)
         else:
-            params = self._conditioner(masked_y, z)
+            params = self._conditioner(masked_y, theta, d, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
         x = jnp.where(self._event_mask, y, x0)
         logdet = math.sum_last(

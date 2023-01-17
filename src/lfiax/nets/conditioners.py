@@ -12,18 +12,24 @@ def conditioner_mlp(
     cond_info_shape: Sequence[int],
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
-    standardize_z: bool = False,
-    resnet: bool = False,
+    standardize_theta: bool = False,
+    resnet: bool = True,
 ) -> hk.Module:
     class ConditionerModule(hk.Module):
-        def __call__(self, x, z):
+        def __call__(self, x, theta, d, xi):
             """x represents data and z its conditional values."""
-            if standardize_z:
+            if standardize_theta:
                 # Normalize the conditioned values
-                z = (z - z.mean(axis=0)) / (z.std(axis=0) + 1e-14)
+                theta = (theta - theta.mean(axis=0)) / (theta.std(axis=0) + 1e-14)
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
-            z = hk.Flatten(preserve_dims=-len(cond_info_shape))(z)
-            # breakpoint()
+            # theta = hk.Flatten(preserve_dims=-cond_info_shape[0])(theta)
+            # d = hk.Flatten(preserve_dims=-cond_info_shape[1])(d)
+            # xi = hk.Flatten(preserve_dims=-cond_info_shape[2])(xi)
+            theta = hk.Flatten()(theta)
+            d = hk.Flatten()(d)
+            xi = hk.Flatten()(xi)
+            # Will this give me the same problem as before i.e. nans?
+            z = jnp.concatenate((theta, d, xi), axis=1)
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
                 for hidden in hidden_sizes:

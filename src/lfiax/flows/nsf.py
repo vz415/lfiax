@@ -29,7 +29,7 @@ def make_nsf(
     hidden_sizes: Sequence[int],
     num_bins: int,
     standardize_x: bool,
-    standardize_z: bool = False,
+    standardize_theta: bool = False,
     use_resnet: bool = True,
     event_dim: int = None,
     shift: float = None,
@@ -73,7 +73,7 @@ def make_nsf(
             cond_info_shape,
             hidden_sizes,
             num_bijector_params,
-            standardize_z,
+            standardize_theta,
             use_resnet,
         )
     else:
@@ -82,7 +82,7 @@ def make_nsf(
             cond_info_shape,
             hidden_sizes,
             num_bijector_params,
-            standardize_z,
+            standardize_theta,
             use_resnet,
         )
 
