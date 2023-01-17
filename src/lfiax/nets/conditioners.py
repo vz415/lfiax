@@ -25,7 +25,6 @@ def conditioner_mlp(
             theta = hk.Flatten()(theta)
             d = hk.Flatten()(d)
             xi = hk.Flatten()(xi)
-            # Will this give me the same problem as before i.e. nans?
             z = jnp.concatenate((theta, d, xi), axis=1)
             x = jnp.concatenate((x, z), axis=1)
             if resnet:

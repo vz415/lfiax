@@ -44,9 +44,8 @@ class MaskedConditionalCoupling(MaskedCoupling):
         masked_x = jnp.where(self._event_mask, x, 0.0)
         # TODO: Better logic to detect when scalar x
         if masked_x.shape[1] == 1:
-            params = self._conditioner(theta, d, xi)
+            params = self._conditioner(theta, xi)
         else:
-            # breakpoint()
             params = self._conditioner(masked_x, theta, d, xi)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
         y = jnp.where(self._event_mask, x, y0)
