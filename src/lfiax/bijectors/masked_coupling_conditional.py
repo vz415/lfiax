@@ -36,7 +36,9 @@ class MaskedConditionalCoupling(MaskedCoupling):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def forward_and_log_det(self, x: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
+    def forward_and_log_det(
+        self, x: Array, theta: Array, d: Array, xi: Array
+    ) -> Tuple[Array, Array]:
         """Computes y = f(x|z) and log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
         masked_x = jnp.where(self._event_mask, x, 0.0)
@@ -54,7 +56,9 @@ class MaskedConditionalCoupling(MaskedCoupling):
         )
         return y, logdet
 
-    def inverse_and_log_det(self, y: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
+    def inverse_and_log_det(
+        self, y: Array, theta: Array, d: Array, xi: Array
+    ) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y|z) and log|det J(f^{-1})(y|z)|."""
         self._check_inverse_input_shape(y)
         masked_y = jnp.where(self._event_mask, y, 0.0)

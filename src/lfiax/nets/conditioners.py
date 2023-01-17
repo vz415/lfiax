@@ -22,9 +22,6 @@ def conditioner_mlp(
                 # Normalize the conditioned values
                 theta = (theta - theta.mean(axis=0)) / (theta.std(axis=0) + 1e-14)
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
-            # theta = hk.Flatten(preserve_dims=-cond_info_shape[0])(theta)
-            # d = hk.Flatten(preserve_dims=-cond_info_shape[1])(d)
-            # xi = hk.Flatten(preserve_dims=-cond_info_shape[2])(xi)
             theta = hk.Flatten()(theta)
             d = hk.Flatten()(d)
             xi = hk.Flatten()(xi)

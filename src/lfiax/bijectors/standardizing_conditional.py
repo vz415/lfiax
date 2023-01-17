@@ -30,14 +30,20 @@ class StandardizingBijector(ScalarAffine):
         batched_shift = jnp.broadcast_to(self._shift, batch_shape)
         return batched_scale * x + batched_shift
 
-    def forward_log_det_jacobian(self, x: Array, theta: Array, d: Array, xi: Array) -> Array:
+    def forward_log_det_jacobian(
+        self, x: Array, theta: Array, d: Array, xi: Array
+    ) -> Array:
         """Computes log|det J(f)(x)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, x.shape)
         return jnp.broadcast_to(self._log_scale, batch_shape)
 
-    def forward_and_log_det(self, x: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
+    def forward_and_log_det(
+        self, x: Array, theta: Array, d: Array, xi: Array
+    ) -> Tuple[Array, Array]:
         """Computes y = f(x) and log|det J(f)(x)| ignoring z."""
-        return self.forward(x, theta, d, xi), self.forward_log_det_jacobian(x, theta, d, xi)
+        return self.forward(x, theta, d, xi), self.forward_log_det_jacobian(
+            x, theta, d, xi
+        )
 
     def inverse(self, y: Array, theta: Array, d: Array, xi: Array) -> Array:
         """Computes x = f^{-1}(y) ignoring z."""
@@ -46,11 +52,17 @@ class StandardizingBijector(ScalarAffine):
         batched_shift = jnp.broadcast_to(self._shift, batch_shape)
         return batched_inv_scale * (y - batched_shift)
 
-    def inverse_log_det_jacobian(self, y: Array, theta: Array, d: Array, xi: Array) -> Array:
+    def inverse_log_det_jacobian(
+        self, y: Array, theta: Array, d: Array, xi: Array
+    ) -> Array:
         """Computes log|det J(f^{-1})(y)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, y.shape)
         return jnp.broadcast_to(jnp.negative(self._log_scale), batch_shape)
 
-    def inverse_and_log_det(self, y: Array, theta: Array, d: Array, xi: Array) -> Tuple[Array, Array]:
+    def inverse_and_log_det(
+        self, y: Array, theta: Array, d: Array, xi: Array
+    ) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y) and log|det J(f^{-1})(y)| ignoring z."""
-        return self.inverse(y, theta, d, xi), self.inverse_log_det_jacobian(y, theta, d, xi)
+        return self.inverse(y, theta, d, xi), self.inverse_log_det_jacobian(
+            y, theta, d, xi
+        )

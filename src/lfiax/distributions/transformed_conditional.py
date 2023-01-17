@@ -21,7 +21,9 @@ class ConditionalTransformed(Transformed):
     def __init__(self, distribution, flow):
         super().__init__(distribution, flow)
 
-    def _sample_n(self, key: PRNGKey, n: int, theta: Array, d: Array, xi: Array) -> Array:
+    def _sample_n(
+        self, key: PRNGKey, n: int, theta: Array, d: Array, xi: Array
+    ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
         y, _ = self.bijector.forward_and_log_det(x, theta, d, xi)

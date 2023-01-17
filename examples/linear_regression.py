@@ -87,7 +87,9 @@ def sim_data(d: Array, priors: Array, key: PRNGKey):
     # ygrads allows to be compared to other implementations (Kleinegesse et)
     y, ygrads = sim_linear_jax(d, priors, keys[1])
 
-    return jnp.column_stack((y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d)))))
+    return jnp.column_stack(
+        (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
+    )
 
 
 def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
@@ -96,19 +98,11 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     # Handling the scalar case
     if data.shape[1] <= 3:
         x = jnp.expand_dims(data[:, :-2], -1)
-    # Use known length of x to split up the cond_data
-    # data_shape = data.shape
-    # start = [0, 0]
-    # stop = [data_shape[0], len_x]
-    # y = lax.dynamic_slice(data, start, stop)
     x = data[:, :len_x]
     cond_data = data[:, len_x:]
     theta = cond_data[:, :-len_x]
     d = cond_data[:, -len_x:-len_xi]
     xi = cond_data[:, -len_xi:]
-    # return x, cond_data
-    # breakpoint()
-    # return y, theta, x, xi
     return x, theta, d, xi
 
 
@@ -121,7 +115,7 @@ def log_prob(data: Array, theta: Array, d: Array, xi: Array) -> Array:
     # Get batch
     shift = data.mean(axis=0)
     scale = data.std(axis=0) + 1e-14
-    
+
     model = make_nsf(
         event_shape=EVENT_SHAPE,
         cond_info_shape=cond_info_shape,
@@ -154,22 +148,18 @@ def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
     return model._sample_n(key=key, n=[num_samples], z=z)
 
 
-def loss_fn(params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array, xi: Array) -> Array:
-    # x, cond_data = prepare_data(batch, prng_key)
-    # I wonder if this will work...
-    # cond_data = jnp.concatenate((theta, d, xi), axis=1)
+def loss_fn(
+    params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array, xi: Array
+) -> Array:
     # Loss is average negative log likelihood.
     loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
-    # loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
     x, theta, d, xi = prepare_data(batch)
-    # cond_data = jnp.concatenate((theta, d, xi), axis=1)
     loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
-    # loss = -jnp.mean(log_prob.apply(params, x, cond_data))
     return loss
 
 
@@ -195,8 +185,8 @@ if __name__ == "__main__":
     # d = jnp.array([-10.0, 0.0, 5.0, 10.0])
     # d = jnp.array([1., 2.])
     # d = jnp.array([1.])
-    d_obs = jnp.array([1.])
-    d_prop = jrandom.uniform(key, shape=(1,), minval=-10., maxval=10.)
+    d_obs = jnp.array([1.0])
+    d_prop = jrandom.uniform(key, shape=(1,), minval=-10.0, maxval=10.0)
     d_sim = jnp.concatenate((d_obs, d_prop), axis=0)
     len_x = len(d_sim)
     len_d = len(d_obs)
@@ -206,7 +196,7 @@ if __name__ == "__main__":
     # Params and hyperparams
     theta_shape = (2,)
     d_shape = (len(d_obs),)
-    xi_shape = (len_xi, )
+    xi_shape = (len_xi,)
     EVENT_SHAPE = (len(d_sim),)
     # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
@@ -239,7 +229,7 @@ if __name__ == "__main__":
     # load_dataset(split: tfds.Split, batch_size: int)
     train_ds = load_dataset(train, 512)
     valid_ds = load_dataset(val, 512)
-    
+
     # Training
     prng_seq = hk.PRNGSequence(42)
     params = log_prob.init(
@@ -249,11 +239,12 @@ if __name__ == "__main__":
         np.zeros((1, *d_shape)),
         np.zeros((1, *xi_shape)),
     )
-    # log_prob.init(next(prng_seq), np.zeros((1, *EVENT_SHAPE)), np.zeros((1, *theta_shape)), np.zeros((1, *d_shape)), np.zeros((1, *xi_shape)),)
     opt_state = optimizer.init(params)
 
     for step in range(training_steps):
-        params, opt_state, grads_d = update(params, next(prng_seq), opt_state, next(train_ds))
+        params, opt_state, grads_d = update(
+            params, next(prng_seq), opt_state, next(train_ds)
+        )
 
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
