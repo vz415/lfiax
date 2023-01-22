@@ -1,3 +1,5 @@
+from collections import deque
+
 import jax
 import jax.numpy as jnp
 import jax.lax as lax
@@ -179,24 +181,24 @@ def log_prob(data: Array, theta: Array, d: Array, xi: Array) -> Array:
 
 @hk.without_apply_rng
 @hk.transform
-def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
-    # TODO: update this method?
+def model_sample(key: PRNGKey, num_samples: int, theta: Array, d: Array, xi: Array) -> Array:
     model = make_nsf(
         event_shape=EVENT_SHAPE,
         cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
+        standardize_x=False,
+        standardize_theta=False,
+        use_resnet=True,
+        event_dim=EVENT_DIM,
     )
-    z = jnp.repeat(cond_data, num_samples, axis=0)
-    z = jnp.expand_dims(z, -1)
-    return model._sample_n(key=key, n=[num_samples], z=z)
+    return model._sample_n(key=key, n=[num_samples], theta=theta, d=d, xi=xi)
 
 
 def loss_fn(
     params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array, xi: Array
 ) -> Array:
-    # Loss is average negative log likelihood.
     loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
     return loss
 
@@ -233,6 +235,8 @@ if __name__ == "__main__":
     # d_obs = jnp.array([1.0])
     d_obs = jnp.array([])
     d_prop = jrandom.uniform(key, shape=(1,), minval=-10.0, maxval=10.0)
+    # d_prop = jnp.array([0.])
+    # d_prop = jnp.array([])
     d_sim = jnp.concatenate((d_obs, d_prop), axis=0)
     len_x = len(d_sim)
     len_d = len(d_obs)
@@ -240,7 +244,7 @@ if __name__ == "__main__":
     num_samples = 100
 
     # Params and hyperparams
-    theta_shape = (2,)
+    theta_shape = (1,)
     d_shape = (len(d_obs),)
     xi_shape = (len_xi,)
     EVENT_SHAPE = (len(d_sim),)
@@ -249,21 +253,24 @@ if __name__ == "__main__":
     cond_info_shape = (theta_shape[0], len_d, len_xi)
 
     batch_size = 128
-    flow_num_layers = 10
-    mlp_num_layers = 4
-    hidden_size = 500
+    flow_num_layers = 5 #3 # 10
+    mlp_num_layers = 4 # 3 # 4
+    hidden_size = 128 # 500
     num_bins = 4
     learning_rate = 1e-4
+    warmup_steps = 100
+    early_stopping_memory = 10
+    early_stopping_threshold = 5e-2
 
-    training_steps = 10  # 00
-    eval_frequency = 100
+    training_steps = 500
+    eval_frequency = 10
 
     optimizer = optax.adam(learning_rate)
 
     # Simulating the data to be used to train the flow.
     num_samples = 10000
     # TODO: put this function in training since d will be changing.
-    X = sim_data(d_sim, num_samples, key)
+    X = sim_data_laplace(d_sim, num_samples, key)
 
     # Create tf dataset from sklearn dataset
     dataset = tf.data.Dataset.from_tensor_slices(X)
@@ -287,6 +294,8 @@ if __name__ == "__main__":
     )
     opt_state = optimizer.init(params)
 
+    # Can change the length of the deque for more/less leniency in measuring the loss
+    loss_deque = deque(maxlen=early_stopping_memory)
     for step in range(training_steps):
         params, opt_state, grads_d = update(
             params, next(prng_seq), opt_state, next(train_ds)
@@ -295,5 +304,10 @@ if __name__ == "__main__":
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
             print(f"STEP: {step:5d}; Validation loss: {val_loss:.3f}")
+        
+            loss_deque.append(val_loss)
+            avg_abs_diff = jnp.mean(abs(jnp.array(loss_deque) - sum(loss_deque)/len(loss_deque)))
+            if step > warmup_steps and avg_abs_diff < early_stopping_threshold:
+                break
 
     
