@@ -54,6 +54,51 @@ def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
     return y, ygrads
 
 
+def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
+    # Keys for the appropriate functions
+    keys = jrandom.split(key, 3)
+
+    # sample random normal dist
+    noise_shape = (1,)
+
+    concentration = jnp.ones(noise_shape)
+    rate = jnp.ones(noise_shape)
+
+    n_n = distrax.Gamma(concentration, rate).sample(seed=keys[0], sample_shape=[len(d), len(priors)])
+
+    # perform forward pass
+    y = jnp.broadcast_to(priors[:, 0], (len(d), len(priors)))
+    y = distrax.MultivariateNormalDiag(y, jnp.squeeze(n_n)).sample(seed=keys[1], sample_shape=())
+
+    return y
+
+
+def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
+    """
+    Returns data in a format suitable for normalizing flow training.
+    Data will be in shape [y, thetas]. The `y` variable can vary in size.
+    """
+    keys = jrandom.split(key, 2)
+    theta_shape = (1,)
+
+    loc = jnp.zeros(theta_shape)
+    scale = jnp.ones(theta_shape)
+
+    # Leaving in case this fixes future dimensionality issues
+    # base_distribution = distrax.Independent(
+    #     distrax.Laplace(loc, scale)
+    # )
+    base_distribution = distrax.Laplace(loc, scale)
+
+    priors = base_distribution.sample(seed=keys[0], sample_shape=[num_samples])
+
+    y = sim_linear_jax_laplace(d, priors, keys[1])
+
+    return jnp.column_stack(
+        (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
+    )
+
+
 # ----------------------------------------
 # Helper functions to simulate data
 # ----------------------------------------

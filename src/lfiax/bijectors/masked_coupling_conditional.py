@@ -63,7 +63,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         masked_y = jnp.where(self._event_mask, y, 0.0)
         # TODO: Better logic to detect when scalar y
         if masked_y.shape[1] == 1:
-            params = self._conditioner(theta, d, xi)
+            params = self._conditioner(theta, xi)
         else:
             params = self._conditioner(masked_y, theta, d, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
