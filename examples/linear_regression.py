@@ -250,3 +250,5 @@ if __name__ == "__main__":
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
             print(f"STEP: {step:5d}; Validation loss: {val_loss:.3f}")
+
+    
