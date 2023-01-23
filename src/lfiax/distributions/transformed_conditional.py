@@ -26,6 +26,7 @@ class ConditionalTransformed(Transformed):
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
+        # breakpoint()
         y, _ = self.bijector.forward_and_log_det(x, theta, d, xi)
         return y
 
