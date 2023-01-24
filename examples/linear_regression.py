@@ -1,3 +1,5 @@
+from omegaconf import DictConfig, OmegaConf
+import hydra
 from collections import deque
 
 import jax
@@ -26,6 +28,35 @@ Array = jnp.ndarray
 PRNGKey = Array
 Batch = Mapping[str, np.ndarray]
 OptState = Any
+
+
+def jax_lexpand(A, *dimensions):
+    """Expand tensor, adding new dimensions on left."""
+    if jnp.isscalar(A):
+        A = A * jnp.ones(dimensions)
+        return A
+    shape = tuple(dimensions) + A.shape
+    A = A[jnp.newaxis, ...]
+    A = jnp.broadcast_to(A, shape)
+    return A
+
+
+def sim_linear_prior(num_samples: int, key: PRNGKey):
+    """
+    Simulate prior samples and return their log_prob.
+    """
+    theta_shape = (2,)
+
+    mu = jnp.zeros(theta_shape)
+    sigma = (3**2) * jnp.ones(theta_shape)
+
+    base_distribution = distrax.Independent(
+        distrax.MultivariateNormalDiag(mu, sigma)
+    )
+
+    samples, log_prob = base_distribution.sample_and_log_prob(seed=key, sample_shape=[num_samples])
+
+    return samples, log_prob
 
 
 def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
@@ -215,7 +246,6 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    # x, cond_data = prepare_data(batch, prng_key)
     x, theta, d, xi = prepare_data(batch)
     grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
     grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
@@ -224,7 +254,33 @@ def update(
     return new_params, new_opt_state, grads_d
 
 
+@jax.jit
+def update_pce(
+    params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
+) -> Tuple[hk.Params, OptState]:
+    """Single SGD update step."""
+    x, theta, d, xi = prepare_data(batch)
+    grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
+    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
+    updates, new_opt_state = optimizer.update(grads, opt_state)
+    new_params = optax.apply_updates(params, updates)
+    return new_params, new_opt_state, grads_d
+
+
+# class Workspace:
+#     def __init__(self, cfg):
+#     def run(self) -> Callable:
+#     def save(self, tag='latest'):
+#     def _init_logging(self):
+
+# from linear_regression import Workspace as W
+
+# @hydra.main(config_name="config")
+# def main(cfg)
+
+
 if __name__ == "__main__":
+    # main()
     # TODO: Put this in hydra config file
     seed = 1231
     key = jrandom.PRNGKey(seed)
@@ -232,10 +288,10 @@ if __name__ == "__main__":
     # d = jnp.array([-10.0, 0.0, 5.0, 10.0])
     # d = jnp.array([1., 2.])
     # d = jnp.array([1.])
-    # d_obs = jnp.array([1.0])
-    d_obs = jnp.array([])
-    d_prop = jrandom.uniform(key, shape=(1,), minval=-10.0, maxval=10.0)
-    # d_prop = jnp.array([0.])
+    d_obs = jnp.array([0.])
+    # d_obs = jnp.array([])
+    # d_prop = jrandom.uniform(key, shape=(1,), minval=-10.0, maxval=10.0)
+    d_prop = jnp.array([10.])
     # d_prop = jnp.array([])
     d_sim = jnp.concatenate((d_obs, d_prop), axis=0)
     len_x = len(d_sim)
@@ -244,7 +300,7 @@ if __name__ == "__main__":
     num_samples = 100
 
     # Params and hyperparams
-    theta_shape = (1,)
+    theta_shape = (2,)
     d_shape = (len(d_obs),)
     xi_shape = (len_xi,)
     EVENT_SHAPE = (len(d_sim),)
@@ -270,7 +326,10 @@ if __name__ == "__main__":
     # Simulating the data to be used to train the flow.
     num_samples = 10000
     # TODO: put this function in training since d will be changing.
-    X = sim_data_laplace(d_sim, num_samples, key)
+    X = sim_data(d_sim, num_samples, key)
+
+    shift = X.mean(axis=0)
+    scale = X.std(axis=0) + 1e-14
 
     # Create tf dataset from sklearn dataset
     dataset = tf.data.Dataset.from_tensor_slices(X)
@@ -292,6 +351,8 @@ if __name__ == "__main__":
         np.zeros((1, *d_shape)),
         np.zeros((1, *xi_shape)),
     )
+    params['xi'] = xi
+
     opt_state = optimizer.init(params)
 
     # Can change the length of the deque for more/less leniency in measuring the loss
@@ -309,5 +370,3 @@ if __name__ == "__main__":
             avg_abs_diff = jnp.mean(abs(jnp.array(loss_deque) - sum(loss_deque)/len(loss_deque)))
             if step > warmup_steps and avg_abs_diff < early_stopping_threshold:
                 break
-
-    
