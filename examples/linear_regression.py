@@ -1,6 +1,7 @@
 from omegaconf import DictConfig, OmegaConf
 import hydra
 from collections import deque
+import math
 
 import jax
 import jax.numpy as jnp
@@ -144,7 +145,7 @@ def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     return iter(tfds.as_numpy(ds))
 
 
-def sim_data(d: Array, priors: Array, key: PRNGKey):
+def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
     Data will be in shape [y, thetas]. The `y` variable can vary in size.
@@ -174,8 +175,9 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     # Batch is [y, thetas, d]
     data = batch.astype(np.float32)
     # Handling the scalar case
-    if data.shape[1] <= 3:
-        x = jnp.expand_dims(data[:, :-2], -1)
+    # if data.shape[1] <= 3:
+    #     print("expanding")
+    #     x = jnp.expand_dims(data[:, :-2], -1)
     x = data[:, :len_x]
     cond_data = data[:, len_x:]
     theta = cond_data[:, :-len_x]
@@ -234,6 +236,17 @@ def loss_fn(
     return loss
 
 
+def unified_loss_fn(
+    params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array
+) -> Array:
+    xi = params['xi']
+    xi = jnp.broadcast_to(xi, (len(x), len(xi)))
+    flow_params = {k: v for k, v in params.items() if k != 'xi'}
+    # Loss is average negative log likelihood.
+    loss = -jnp.mean(log_prob.apply(flow_params, x, theta, d, xi))
+    return loss
+
+
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
     x, theta, d, xi = prepare_data(batch)
@@ -246,25 +259,55 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
+    # x, cond_data = prepare_data(batch, prng_key)
     x, theta, d, xi = prepare_data(batch)
-    grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
-    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
+    # grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
+    # grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
+    grads = jax.grad(unified_loss_fn)(params, prng_key, x, theta, d)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state, grads_d
+    return new_params, new_opt_state#, grads_d
+
+
+def lfi_pce_eig(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
+    keys = jrandom.split(prng_key, 3 + M)
+    xi = params['xi']
+    flow_params = {k: v for k, v in params.items() if k != 'xi'}
+
+    # simulate the outcomes before finding their log_probs
+    X = sim_data(d_sim, num_samples, keys[0])  # Do I need to split up the prng_key?
+
+    # I'm implicitly returning the prior here, that's a little annoying...
+    x, theta_0, d, xi = prepare_data(X)  # TODO: Maybe refactor this?
+
+    conditional_lp = log_prob.apply(flow_params, x, theta_0, d, xi)
+
+    contrastive_lps = []
+    thetas = []
+    # TODO: Make this jax.lax expression for safe tracing and execution
+    for i in range(M):
+        # breakpoint()
+        theta, _ = sim_linear_prior(num_samples, keys[i + 1])
+        thetas.append(theta)
+        contrastive_lp = log_prob.apply(flow_params, x, theta, d, xi)
+        contrastive_lps.append(contrastive_lp)
+
+    marginal_log_prbs = jnp.concatenate((jax_lexpand(conditional_lp, 1), jnp.array(contrastive_lps)))
+
+    marginal_lp = jax.nn.logsumexp(marginal_log_prbs, 0) - math.log(M + 1)
+
+    return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
 
 
 @jax.jit
 def update_pce(
-    params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
+    params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    x, theta, d, xi = prepare_data(batch)
-    grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
-    grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
+    grads = jax.grad(lfi_pce_eig)(params, prng_key, N=num_samples, M=inner_samples)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state, grads_d
+    return new_params, new_opt_state
 
 
 # class Workspace:
@@ -283,50 +326,59 @@ if __name__ == "__main__":
     # main()
     # TODO: Put this in hydra config file
     seed = 1231
+    M = 3
     key = jrandom.PRNGKey(seed)
 
-    # d = jnp.array([-10.0, 0.0, 5.0, 10.0])
-    # d = jnp.array([1., 2.])
-    # d = jnp.array([1.])
-    d_obs = jnp.array([0.])
-    # d_obs = jnp.array([])
-    # d_prop = jrandom.uniform(key, shape=(1,), minval=-10.0, maxval=10.0)
-    d_prop = jnp.array([10.])
-    # d_prop = jnp.array([])
-    d_sim = jnp.concatenate((d_obs, d_prop), axis=0)
-    len_x = len(d_sim)
-    len_d = len(d_obs)
-    len_xi = len(d_prop)
-    num_samples = 100
+    d = jnp.array([])
+    xi = jnp.array([0.])
+    d_sim = jnp.concatenate((d, xi), axis=0)
 
     # Params and hyperparams
+    len_x = len(d_sim)
+    len_d = len(d)
+    len_xi = len(xi)
+
     theta_shape = (2,)
-    d_shape = (len(d_obs),)
+    d_shape = (len(d),)
     xi_shape = (len_xi,)
     EVENT_SHAPE = (len(d_sim),)
     # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
     cond_info_shape = (theta_shape[0], len_d, len_xi)
 
+    num_samples = 2
+    inner_samples = 10 # AKA M or L in BOED parlance
     batch_size = 128
     flow_num_layers = 5 #3 # 10
-    mlp_num_layers = 4 # 3 # 4
+    mlp_num_layers = 1 # 3 # 4
     hidden_size = 128 # 500
     num_bins = 4
     learning_rate = 1e-4
-    warmup_steps = 100
+    warmup_steps = 10
     early_stopping_memory = 10
     early_stopping_threshold = 5e-2
 
-    training_steps = 500
-    eval_frequency = 10
+    training_steps = 100
+    eval_frequency = 5
+
+    # Initialzie the params
+    prng_seq = hk.PRNGSequence(42)  # TODO: Put one of "keys" here?
+    params = log_prob.init(
+        next(prng_seq),
+        np.zeros((1, *EVENT_SHAPE)),
+        np.zeros((1, *theta_shape)),
+        np.zeros((1, *d_shape)),
+        np.zeros((1, *xi_shape)),
+    )
+    params['xi'] = xi
 
     optimizer = optax.adam(learning_rate)
 
-    # Simulating the data to be used to train the flow.
-    num_samples = 10000
+    opt_state = optimizer.init(params)
+
     # TODO: put this function in training since d will be changing.
-    X = sim_data(d_sim, num_samples, key)
+    X_samples = 512*20
+    X = sim_data(d_sim, X_samples, key)
 
     shift = X.mean(axis=0)
     scale = X.std(axis=0) + 1e-14
@@ -342,26 +394,16 @@ if __name__ == "__main__":
     train_ds = load_dataset(train, 512)
     valid_ds = load_dataset(val, 512)
 
-    # Training
-    prng_seq = hk.PRNGSequence(42)
-    params = log_prob.init(
-        next(prng_seq),
-        np.zeros((1, *EVENT_SHAPE)),
-        np.zeros((1, *theta_shape)),
-        np.zeros((1, *d_shape)),
-        np.zeros((1, *xi_shape)),
-    )
-    params['xi'] = xi
-
-    opt_state = optimizer.init(params)
-
-    # Can change the length of the deque for more/less leniency in measuring the loss
     loss_deque = deque(maxlen=early_stopping_memory)
     for step in range(training_steps):
-        params, opt_state, grads_d = update(
+        # params, opt_state = update_pce(
+        #     params, next(prng_seq), opt_state, N=num_samples, M=M
+        # )
+        params, opt_state = update(
             params, next(prng_seq), opt_state, next(train_ds)
         )
 
+        print(f"STEP: {step:5d}; Xi: {params['xi']}")
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
             print(f"STEP: {step:5d}; Validation loss: {val_loss:.3f}")
