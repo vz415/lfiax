@@ -57,7 +57,6 @@ class ConditionerModule(hk.Module):
 
 def conditioner_mlp(
     event_shape: Sequence[int],
-    cond_info_shape: Sequence[int],
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
     standardize_theta: bool = False,
@@ -93,6 +92,7 @@ def conditioner_mlp(
             x = hk.Reshape(
                 tuple(event_shape) + (num_bijector_params,), preserve_dims=-1
             )(x)
+            # jax.debug.print("x: {}", x)
             return x
 
     return ConditionerModule()

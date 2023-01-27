@@ -38,7 +38,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         super().__init__(**kwargs)
 
     def forward_and_log_det(
-        self, x: Array, theta: Array, d: Array, xi: Array
+        self, x: Array, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
         """Computes y = f(x|z) and log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
@@ -54,11 +54,23 @@ class MaskedConditionalCoupling(MaskedCoupling):
         # params = jax.lax.cond(pred, 
         #                 lambda: self._conditioner(theta, xi),
         #                 lambda: self._conditioner(masked_x, theta, d, xi))
-        params = self._conditioner(masked_x, theta, d, xi)
+        params = self._conditioner(masked_x, theta, xi)
         # breakpoint()
         # jax.debug.print("params: {}", params)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
-        y = jnp.where(self._event_mask, x, y0)
+        # def loss_fun(params):
+        #     y, logdet = self._inner_bijector(params).forward_and_log_det(x)
+        #     return -logdet
+        
+        # grads = jax.grad(loss_fun)(params)
+        # jax.debug.print("Gradients of the loss function with respect to the conditioning network's parameters: {}", grads)
+        # jax.debug.print("unmasked y: {}", y0)
+        # TODO: Check that this makes sense...
+        if masked_x.shape[1] > 1:
+            y = jnp.where(self._event_mask, x, y0)
+        else:
+            y = y0
+        # jax.debug.print("masked y: {}", y)
         logdet = math.sum_last(
             jnp.where(self._mask, 0.0, log_d),
             self._event_ndims - self._inner_event_ndims,
@@ -66,7 +78,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         return y, logdet
 
     def inverse_and_log_det(
-        self, y: Array, theta: Array, d: Array, xi: Array
+        self, y: Array, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y|z) and log|det J(f^{-1})(y|z)|."""
         self._check_inverse_input_shape(y)
@@ -80,7 +92,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         # params = jax.lax.cond(pred, 
         #                 lambda: self._conditioner(theta, xi),
         #                 lambda: self._conditioner(masked_y, theta, d, xi))
-        params = self._conditioner(masked_y, theta, d, xi)
+        params = self._conditioner(masked_y, theta, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
         x = jnp.where(self._event_mask, y, x0)
         logdet = math.sum_last(

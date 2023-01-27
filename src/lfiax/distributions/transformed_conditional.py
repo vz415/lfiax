@@ -22,23 +22,23 @@ class ConditionalTransformed(Transformed):
         super().__init__(distribution, flow)
 
     def _sample_n(
-        self, key: PRNGKey, n: int, theta: Array, d: Array, xi: Array
+        self, key: PRNGKey, n: int, theta: Array, xi: Array
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
         # breakpoint()
-        y, _ = self.bijector.forward_and_log_det(x, theta, d, xi)
+        y, _ = self.bijector.forward_and_log_det(x, theta, xi)
         return y
 
-    def log_prob(self, value: Array, theta: Array, d: Array, xi: Array) -> Array:
+    def log_prob(self, value: Array, theta: Array, xi: Array) -> Array:
         """See `Distribution.log_prob`."""
-        x, ildj_y = self.bijector.inverse_and_log_det(value, theta, d, xi)
+        x, ildj_y = self.bijector.inverse_and_log_det(value, theta, xi)
         lp_x = self.distribution.log_prob(x)
         lp_y = lp_x + ildj_y
         return lp_y
 
     def _sample_n_and_log_prob(
-        self, key: PRNGKey, n: int, theta: Array, d: Array, xi: Array
+        self, key: PRNGKey, n: int, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
         """Returns `n` samples and their log probs depending on `z`.
 
@@ -54,6 +54,6 @@ class ConditionalTransformed(Transformed):
           A tuple of `n` samples and their log probs.
         """
         x, lp_x = self.distribution.sample_and_log_prob(seed=key, sample_shape=n)
-        y, fldj = jax.vmap(self.bijector.forward_and_log_det)(x, theta, d, xi)
+        y, fldj = jax.vmap(self.bijector.forward_and_log_det)(x, theta, xi)
         lp_y = jax.vmap(jnp.subtract)(lp_x, fldj)
         return y, lp_y

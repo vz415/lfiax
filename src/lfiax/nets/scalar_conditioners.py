@@ -52,7 +52,6 @@ class ScalarConditionerModule(hk.Module):
 
 def scalar_conditioner_mlp(
     event_shape: Sequence[int],
-    cond_info_shape: Sequence[int],
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
     standardize_theta: bool = False,
@@ -76,14 +75,19 @@ def scalar_conditioner_mlp(
                     z += hk.Linear(hidden)(hk.Flatten()(z))
             else:
                 z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
+            # jax.debug.print("z prev: {}", z)
+            # breakpoint()
             z = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
                 w_init=jnp.zeros,
                 b_init=jnp.zeros,
             )(z)
+            # hk.Linear(np.prod(event_shape) * num_bijector_params, w_init=jnp.zeros, b_init=jnp.zeros)(z)
+            # jax.debug.print("z: {}", z)
             z = hk.Reshape(
                 tuple(event_shape) + (num_bijector_params,), preserve_dims=-1
             )(z)
+            # jax.debug.print("z: {}", z)
             return z
 
     return ScalarConditionerModule()

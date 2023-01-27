@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
+from jax.test_util import check_grads
+
 import numpy as np
 import optax
 import distrax
@@ -191,14 +193,14 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
 # ----------------------------
 @hk.without_apply_rng
 @hk.transform
-def log_prob(data: Array, theta: Array, d: Array, xi: Array) -> Array:
+def log_prob(data: Array, theta: Array, xi: Array) -> Array:
     # Get batch
     shift = data.mean(axis=0)
     scale = data.std(axis=0) + 1e-14
 
     model = make_nsf(
         event_shape=EVENT_SHAPE,
-        cond_info_shape=cond_info_shape,
+        # cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
@@ -209,15 +211,15 @@ def log_prob(data: Array, theta: Array, d: Array, xi: Array) -> Array:
         shift=shift,
         scale=scale,
     )
-    return model.log_prob(data, theta, d, xi)
+    return model.log_prob(data, theta, xi)
 
 
 @hk.without_apply_rng
 @hk.transform
-def model_sample(key: PRNGKey, num_samples: int, theta: Array, d: Array, xi: Array) -> Array:
+def model_sample(key: PRNGKey, num_samples: int, theta: Array, xi: Array) -> Array:
     model = make_nsf(
         event_shape=EVENT_SHAPE,
-        cond_info_shape=cond_info_shape,
+        # cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
@@ -226,7 +228,7 @@ def model_sample(key: PRNGKey, num_samples: int, theta: Array, d: Array, xi: Arr
         use_resnet=True,
         event_dim=EVENT_DIM,
     )
-    return model._sample_n(key=key, n=[num_samples], theta=theta, d=d, xi=xi)
+    return model._sample_n(key=key, n=[num_samples], theta=theta, xi=xi)
 
 
 def loss_fn(
@@ -237,20 +239,21 @@ def loss_fn(
 
 
 def unified_loss_fn(
-    params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array, d: Array
+    params: hk.Params, prng_key: PRNGKey, x: Array, theta: Array
 ) -> Array:
-    xi = params['xi']
+    xi = jnp.asarray(params['xi'])
     xi = jnp.broadcast_to(xi, (len(x), len(xi)))
     flow_params = {k: v for k, v in params.items() if k != 'xi'}
+    # breakpoint()
     # Loss is average negative log likelihood.
-    loss = -jnp.mean(log_prob.apply(flow_params, x, theta, d, xi))
+    loss = -jnp.mean(log_prob.apply(flow_params, x, theta, xi))
     return loss
 
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
     x, theta, d, xi = prepare_data(batch)
-    loss = -jnp.mean(log_prob.apply(params, x, theta, d, xi))
+    loss = -jnp.mean(log_prob.apply(params, x, theta, xi))
     return loss
 
 
@@ -263,7 +266,7 @@ def update(
     x, theta, d, xi = prepare_data(batch)
     # grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
     # grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
-    grads = jax.grad(unified_loss_fn)(params, prng_key, x, theta, d)
+    grads = jax.grad(unified_loss_fn)(params, prng_key, x, theta)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
     return new_params, new_opt_state#, grads_d
@@ -344,7 +347,7 @@ if __name__ == "__main__":
     EVENT_SHAPE = (len(d_sim),)
     # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
-    cond_info_shape = (theta_shape[0], len_d, len_xi)
+    # cond_info_shape = (theta_shape[0], len_d, len_xi)
 
     num_samples = 2
     inner_samples = 10 # AKA M or L in BOED parlance
@@ -367,7 +370,7 @@ if __name__ == "__main__":
         next(prng_seq),
         np.zeros((1, *EVENT_SHAPE)),
         np.zeros((1, *theta_shape)),
-        np.zeros((1, *d_shape)),
+        # np.zeros((1, *d_shape)),
         np.zeros((1, *xi_shape)),
     )
     params['xi'] = xi
@@ -403,6 +406,8 @@ if __name__ == "__main__":
             params, next(prng_seq), opt_state, next(train_ds)
         )
 
+        # x, theta, d, xi = prepare_data(next(train_ds))
+        # print(check_grads(unified_loss_fn, (params, next(prng_seq), jnp.asarray(x), jnp.asarray(theta)), order=2))
         print(f"STEP: {step:5d}; Xi: {params['xi']}")
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
