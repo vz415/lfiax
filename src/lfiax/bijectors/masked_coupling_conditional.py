@@ -45,17 +45,8 @@ class MaskedConditionalCoupling(MaskedCoupling):
         masked_x = jnp.where(self._event_mask, x, 0.0)
         # TODO: Better logic to detect when scalar x
         params = self._conditioner(masked_x, theta, xi)
-        # breakpoint()
-        # jax.debug.print("params: {}", params)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
-        # def loss_fun(params):
-        #     y, logdet = self._inner_bijector(params).forward_and_log_det(x)
-        #     return -logdet
-        
-        # grads = jax.grad(loss_fun)(params)
-        # jax.debug.print("Gradients of the loss function with respect to the conditioning network's parameters: {}", grads)
-        # jax.debug.print("unmasked y: {}", y0)
-        # TODO: Check that this makes sense...
+        # TODO: Check that this makes sense for scalars...
         if masked_x.shape[1] > 1:
             y = jnp.where(self._event_mask, x, y0)
         else:
@@ -72,17 +63,10 @@ class MaskedConditionalCoupling(MaskedCoupling):
         """Computes x = f^{-1}(y|z) and log|det J(f^{-1})(y|z)|."""
         self._check_inverse_input_shape(y)
         masked_y = jnp.where(self._event_mask, y, 0.0)
-        # TODO: Better logic to detect when scalar y
-        # if masked_y.shape[1] == 1:
-        #     params = self._conditioner(theta, xi)
-        # else:
-        #     params = self._conditioner(masked_y, theta, d, xi)
-        # pred = jnp.equal(masked_y.shape[1], 1)
-        # params = jax.lax.cond(pred, 
-        #                 lambda: self._conditioner(theta, xi),
-        #                 lambda: self._conditioner(masked_y, theta, d, xi))
+        # TODO: Better logic to detect when scalar y?
         params = self._conditioner(masked_y, theta, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
+        # TODO: Check that this makes sense for scalars...
         if masked_y.shape[1] > 1:
             x = jnp.where(self._event_mask, y, x0)
         else:

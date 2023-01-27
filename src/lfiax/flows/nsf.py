@@ -15,10 +15,8 @@ from lfiax.bijectors.standardizing_conditional import StandardizingBijector
 
 from lfiax.distributions.transformed_conditional import ConditionalTransformed
 
-# from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp
-from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp, ScalarConditionerModule
-# from lfiax.nets.conditioners import conditioner_mlp
-from lfiax.nets.conditioners import conditioner_mlp, ConditionerModule
+from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp
+from lfiax.nets.conditioners import conditioner_mlp
 
 
 Array = jnp.ndarray
@@ -68,25 +66,10 @@ def make_nsf(
         ]
     else:
         layers = []
-    # self._conditioner.params_dict()
-    # @jax.jit
-    # def scalar_conditioner_fn(*args, **kwargs):
-    #     return scalar_conditioner_mlp(*args, **kwargs)
-
-    # @jax.jit
-    # def non_scalar_conditioner_fn(*args, **kwargs):
-        # return conditioner_mlp(*args, **kwargs)
-    # breakpoint()
-    # conditioner = jax.lax.cond(
-    #     event_shape == (1,), 
-    #     jax.jit(lambda a, b, c, d, e, f: ScalarConditionerModule(a, b, c, d, e, f)),
-    #     ConditionerModule, 
-    #     event_shape, cond_info_shape, hidden_sizes, num_bijector_params, standardize_theta, use_resnet)
 
     if event_shape == (1,):
         conditioner = scalar_conditioner_mlp(
             event_shape,
-            # cond_info_shape,
             hidden_sizes,
             num_bijector_params,
             standardize_theta,
@@ -95,7 +78,6 @@ def make_nsf(
     else:
         conditioner = conditioner_mlp(
             event_shape,
-            # cond_info_shape,
             hidden_sizes,
             num_bijector_params,
             standardize_theta,
@@ -132,27 +114,3 @@ def make_nsf(
         raise AssertionError("Specified non-implemented distribution.")
 
     return ConditionalTransformed(base_distribution, flow)
-
-
-
-# def cond_fn(event_shape, cond_info_shape, hidden_sizes, num_bijector_params, standardize_theta, use_resnet):
-#     if event_shape == (1,):
-#         return scalar_conditioner_mlp(
-#             event_shape,
-#             cond_info_shape,
-#             hidden_sizes,
-#             num_bijector_params,
-#             standardize_theta,
-#             use_resnet,
-#         )
-#     else:
-#         return conditioner_mlp(
-#             event_shape,
-#             cond_info_shape,
-#             hidden_sizes,
-#             num_bijector_params,
-#             standardize_theta,
-#             use_resnet,
-#         )
-
-# create a function to use with jax.lax.cond

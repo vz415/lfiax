@@ -1,5 +1,5 @@
-from omegaconf import DictConfig, OmegaConf
-import hydra
+# from omegaconf import DictConfig, OmegaConf
+# import hydra
 from collections import deque
 import math
 
@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
-from jax.test_util import check_grads
+# from jax.test_util import check_grads
 
 import numpy as np
 import optax
@@ -43,7 +43,9 @@ def jax_lexpand(A, *dimensions):
     A = jnp.broadcast_to(A, shape)
     return A
 
-
+# ----------------------------------------
+# Prior simulators
+# ----------------------------------------
 def sim_linear_prior(num_samples: int, key: PRNGKey):
     """
     Simulate prior samples and return their log_prob.
@@ -61,8 +63,13 @@ def sim_linear_prior(num_samples: int, key: PRNGKey):
 
     return samples, log_prob
 
-
+# ----------------------------------------
+# Likelihood simulators
+# ----------------------------------------
 def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
+    """
+    Simulate linear model with normal and gamma noise, from Kleinegesse et al. 2020.
+    """
     # Keys for the appropriate functions
     keys = jrandom.split(key, 3)
 
@@ -91,6 +98,12 @@ def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
 
 
 def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
+    """
+    Sim linear laplace prior regression model.
+
+    Returns: 
+        y: scalar value, or, array of scalars.
+    """
     # Keys for the appropriate functions
     keys = jrandom.split(key, 3)
 
@@ -113,6 +126,7 @@ def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
     Data will be in shape [y, thetas]. The `y` variable can vary in size.
+    Uses `sim_linear_jax_laplace` function.
     """
     keys = jrandom.split(key, 2)
     theta_shape = (1,)
@@ -133,18 +147,6 @@ def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     return jnp.column_stack(
         (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
     )
-
-
-# ----------------------------------------
-# Helper functions to simulate data
-# ----------------------------------------
-def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
-    ds = split
-    ds = ds.shuffle(buffer_size=10 * batch_size)
-    ds = ds.batch(batch_size)
-    ds = ds.prefetch(buffer_size=1000)
-    ds = ds.repeat()
-    return iter(tfds.as_numpy(ds))
 
 
 def sim_data(d: Array, num_samples: Array, key: PRNGKey):
@@ -173,13 +175,21 @@ def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     )
 
 
+# ----------------------------------------
+# Helper functions to simulate data
+# ----------------------------------------
+def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
+    ds = split
+    ds = ds.shuffle(buffer_size=10 * batch_size)
+    ds = ds.batch(batch_size)
+    ds = ds.prefetch(buffer_size=1000)
+    ds = ds.repeat()
+    return iter(tfds.as_numpy(ds))
+
+
 def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     # Batch is [y, thetas, d]
     data = batch.astype(np.float32)
-    # Handling the scalar case
-    # if data.shape[1] <= 3:
-    #     print("expanding")
-    #     x = jnp.expand_dims(data[:, :-2], -1)
     x = data[:, :len_x]
     cond_data = data[:, len_x:]
     theta = cond_data[:, :-len_x]
@@ -200,7 +210,6 @@ def log_prob(data: Array, theta: Array, xi: Array) -> Array:
 
     model = make_nsf(
         event_shape=EVENT_SHAPE,
-        # cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
@@ -219,7 +228,6 @@ def log_prob(data: Array, theta: Array, xi: Array) -> Array:
 def model_sample(key: PRNGKey, num_samples: int, theta: Array, xi: Array) -> Array:
     model = make_nsf(
         event_shape=EVENT_SHAPE,
-        # cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
@@ -244,7 +252,7 @@ def unified_loss_fn(
     xi = jnp.asarray(params['xi'])
     xi = jnp.broadcast_to(xi, (len(x), len(xi)))
     flow_params = {k: v for k, v in params.items() if k != 'xi'}
-    # breakpoint()
+    
     # Loss is average negative log likelihood.
     loss = -jnp.mean(log_prob.apply(flow_params, x, theta, xi))
     return loss
@@ -262,14 +270,12 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    # x, cond_data = prepare_data(batch, prng_key)
     x, theta, d, xi = prepare_data(batch)
-    # grads = jax.grad(loss_fn)(params, prng_key, x, theta, d, xi)
-    # grads_d = jax.grad(loss_fn, argnums=5)(params, prng_key, x, theta, d, xi)
+    # Note that `xi` is passed as a parameter to be updated during optimization
     grads = jax.grad(unified_loss_fn)(params, prng_key, x, theta)
     updates, new_opt_state = optimizer.update(grads, opt_state)
     new_params = optax.apply_updates(params, updates)
-    return new_params, new_opt_state#, grads_d
+    return new_params, new_opt_state
 
 
 def lfi_pce_eig(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
@@ -347,7 +353,6 @@ if __name__ == "__main__":
     EVENT_SHAPE = (len(d_sim),)
     # EVENT_DIM is important for the normalizing flow's block.
     EVENT_DIM = 1
-    # cond_info_shape = (theta_shape[0], len_d, len_xi)
 
     num_samples = 2
     inner_samples = 10 # AKA M or L in BOED parlance
@@ -364,13 +369,12 @@ if __name__ == "__main__":
     training_steps = 100
     eval_frequency = 5
 
-    # Initialzie the params
+    # Initialize the params
     prng_seq = hk.PRNGSequence(42)  # TODO: Put one of "keys" here?
     params = log_prob.init(
         next(prng_seq),
         np.zeros((1, *EVENT_SHAPE)),
         np.zeros((1, *theta_shape)),
-        # np.zeros((1, *d_shape)),
         np.zeros((1, *xi_shape)),
     )
     params['xi'] = xi
@@ -406,8 +410,6 @@ if __name__ == "__main__":
             params, next(prng_seq), opt_state, next(train_ds)
         )
 
-        # x, theta, d, xi = prepare_data(next(train_ds))
-        # print(check_grads(unified_loss_fn, (params, next(prng_seq), jnp.asarray(x), jnp.asarray(theta)), order=2))
         print(f"STEP: {step:5d}; Xi: {params['xi']}")
         if step % eval_frequency == 0:
             val_loss = eval_fn(params, next(valid_ds))
