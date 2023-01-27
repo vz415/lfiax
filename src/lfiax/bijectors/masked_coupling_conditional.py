@@ -44,16 +44,6 @@ class MaskedConditionalCoupling(MaskedCoupling):
         self._check_forward_input_shape(x)
         masked_x = jnp.where(self._event_mask, x, 0.0)
         # TODO: Better logic to detect when scalar x
-        # if masked_x.shape[1] == 1:
-        #     # breakpoint()
-        #     params = self._conditioner(theta, xi)
-        # else:
-        #     # breakpoint()
-        #     params = self._conditioner(masked_x, theta, d, xi)
-        # pred = jnp.equal(masked_x.shape[1], 1)
-        # params = jax.lax.cond(pred, 
-        #                 lambda: self._conditioner(theta, xi),
-        #                 lambda: self._conditioner(masked_x, theta, d, xi))
         params = self._conditioner(masked_x, theta, xi)
         # breakpoint()
         # jax.debug.print("params: {}", params)
@@ -70,7 +60,6 @@ class MaskedConditionalCoupling(MaskedCoupling):
             y = jnp.where(self._event_mask, x, y0)
         else:
             y = y0
-        # jax.debug.print("masked y: {}", y)
         logdet = math.sum_last(
             jnp.where(self._mask, 0.0, log_d),
             self._event_ndims - self._inner_event_ndims,
@@ -94,7 +83,10 @@ class MaskedConditionalCoupling(MaskedCoupling):
         #                 lambda: self._conditioner(masked_y, theta, d, xi))
         params = self._conditioner(masked_y, theta, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
-        x = jnp.where(self._event_mask, y, x0)
+        if masked_y.shape[1] > 1:
+            x = jnp.where(self._event_mask, y, x0)
+        else:
+            x = x0
         logdet = math.sum_last(
             jnp.where(self._mask, 0.0, log_d),
             self._event_ndims - self._inner_event_ndims,
