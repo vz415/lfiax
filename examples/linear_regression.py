@@ -149,9 +149,10 @@ def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     )
 
 
-def sim_data(d: Array, num_samples: Array, key: PRNGKey):
+def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
     """
-    Returns data in a format suitable for normalizing flow training.
+    Returns data in a format suitable for normalizing flow trainin using
+    TF datasets.
     Data will be in shape [y, thetas]. The `y` variable can vary in size.
     """
     keys = jrandom.split(key, 2)
@@ -175,6 +176,30 @@ def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     )
 
 
+def sim_data(d: Array, num_samples: Array, key: PRNGKey):
+    """
+    Returns data in a format suitable for normalizing flow training.
+    Data will be in shape (y, thetas, d). The `y` variable can vary in size.
+    """
+    keys = jrandom.split(key, 2)
+
+    theta_shape = (2,)
+
+    mu = jnp.zeros(theta_shape)
+    sigma = (3**2) * jnp.ones(theta_shape)
+
+    base_distribution = distrax.Independent(  # Should this be independent?
+        distrax.MultivariateNormalDiag(mu, sigma)
+    )
+
+    priors = base_distribution.sample(seed=keys[0], sample_shape=[num_samples])
+
+    # ygrads allows to be compared to other implementations (Kleinegesse et)
+    y, ygrads = sim_linear_jax(d, priors, keys[1])
+
+    return y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d)))
+
+
 # ----------------------------------------
 # Helper functions to simulate data
 # ----------------------------------------
@@ -187,7 +212,7 @@ def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     return iter(tfds.as_numpy(ds))
 
 
-def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
+def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     # Batch is [y, thetas, d]
     data = batch.astype(np.float32)
     x = data[:, :len_x]
@@ -260,7 +285,7 @@ def unified_loss_fn(
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
-    x, theta, d, xi = prepare_data(batch)
+    x, theta, d, xi = prepare_tf_dataset(batch)
     loss = -jnp.mean(log_prob.apply(params, x, theta, xi))
     return loss
 
@@ -270,7 +295,7 @@ def update(
     params: hk.Params, prng_key: PRNGKey, opt_state: OptState, batch: Batch
 ) -> Tuple[hk.Params, OptState]:
     """Single SGD update step."""
-    x, theta, d, xi = prepare_data(batch)
+    x, theta, d, xi = prepare_tf_dataset(batch)
     # Note that `xi` is passed as a parameter to be updated during optimization
     grads = jax.grad(unified_loss_fn)(params, prng_key, x, theta)
     updates, new_opt_state = optimizer.update(grads, opt_state)
@@ -284,7 +309,7 @@ def lfi_pce_eig(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **k
     flow_params = {k: v for k, v in params.items() if k != 'xi'}
 
     # simulate the outcomes before finding their log_probs
-    X = sim_data(d_sim, num_samples, keys[0])  # Do I need to split up the prng_key?
+    X = sim_data_tf(d_sim, num_samples, keys[0])  # Do I need to split up the prng_key?
 
     # I'm implicitly returning the prior here, that's a little annoying...
     x, theta_0, d, xi = prepare_data(X)  # TODO: Maybe refactor this?
@@ -338,15 +363,17 @@ if __name__ == "__main__":
     M = 3
     key = jrandom.PRNGKey(seed)
 
-    d = jnp.array([])
+    d = jnp.array([1.])
     xi = jnp.array([0.])
     d_sim = jnp.concatenate((d, xi), axis=0)
 
-    # Params and hyperparams
+    # helper variables for `prepare_tf_dataset`
     len_x = len(d_sim)
     len_d = len(d)
+    # Actually necessary value for `sim_data` output
     len_xi = len(xi)
 
+    # Params and hyperparams
     theta_shape = (2,)
     d_shape = (len(d),)
     xi_shape = (len_xi,)
@@ -385,7 +412,7 @@ if __name__ == "__main__":
 
     # TODO: put this function in training since d will be changing.
     X_samples = 512*20
-    X = sim_data(d_sim, X_samples, key)
+    X = sim_data_tf(d_sim, X_samples, key)
 
     shift = X.mean(axis=0)
     scale = X.std(axis=0) + 1e-14

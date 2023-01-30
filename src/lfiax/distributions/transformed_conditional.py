@@ -26,7 +26,6 @@ class ConditionalTransformed(Transformed):
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
-        # breakpoint()
         y, _ = self.bijector.forward_and_log_det(x, theta, xi)
         return y
 
@@ -40,7 +39,8 @@ class ConditionalTransformed(Transformed):
     def _sample_n_and_log_prob(
         self, key: PRNGKey, n: int, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
-        """Returns `n` samples and their log probs depending on `z`.
+        """Returns `n` samples and their log probs depending on conditioning 
+        variables.
 
         This function is more efficient than calling `sample` and `log_prob`
         separately, because it uses only the forward methods of the bijector. It
