@@ -16,7 +16,6 @@ def conditioner_mlp(
     resnet: bool = True,
 ) -> hk.Module:
     class ConditionerModule(hk.Module):
-        # def __call__(self, x, theta, d, xi):
         def __call__(self, x, theta, xi):
             """x represents data and z its conditional values."""
             if standardize_theta:
