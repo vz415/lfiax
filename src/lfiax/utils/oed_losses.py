@@ -20,6 +20,11 @@ PRNGKey = Array
 
 @partial(jax.jit, static_argnums=[2,3])
 def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
+    """
+    Calculates PCE loss using jax.lax.fori_loop to accelerate. Slightly slower than scan.
+    More readable than scan.
+    TODO: refactor arguments.
+    """
     def compute_marginal(M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp):
         def loop_body_fun2(i, carry):
             contrastive_lps = carry
@@ -46,8 +51,11 @@ def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10
     return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
 
 
-@partial(jax.jit, static_argnums=[1,2,3,4])
-def lfi_pce_eig_scan(prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10):
+@partial(jax.jit, static_argnums=[2,4,5])
+def lfi_pce_eig_scan(params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10):
+    """
+    Calculates PCE loss using jax.lax.scan to accelerate.
+    """
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
@@ -73,6 +81,11 @@ def lfi_pce_eig_scan(prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, 
 
 @partial(jax.jit, static_argnums=[2,3])
 def lfi_pce_eig_vmap_distrax(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
+    """
+    Calculates PCE loss using vmap inherent to `distrax` distributions. May be faster
+    than scan on GPUs.
+    TODO: refactor arguments.
+    """
     keys = jrandom.split(prng_key, 2)
     xi = params['xi']
     flow_params = {k: v for k, v in params.items() if k != 'xi'}
@@ -98,6 +111,12 @@ def lfi_pce_eig_vmap_distrax(params: hk.Params, prng_key: PRNGKey, N: int=100, M
 
 @partial(jax.jit, static_argnums=[2,3])
 def lfi_pce_eig_vmap_manual(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
+    """
+    Calculates PCE loss using explicit vmap of `distrax` distributions. May potentially
+    be more stable than using `ditrax` implicit version as of 2/9/23. May be faster
+    than scan on GPUs.
+    TODO: refactor arguments.
+    """
     keys = jrandom.split(prng_key, M + 1)
     xi = params['xi']
     flow_params = {k: v for k, v in params.items() if k != 'xi'}

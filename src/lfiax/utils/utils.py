@@ -4,7 +4,18 @@ import jax.lax as lax
 import jax.random as jrandom
 
 import haiku as hk
+import numpy as np
+import tensorflow_datasets as tfds
 
+from typing import (
+    Any,
+    Iterator,
+    Mapping,
+    Optional,
+    Tuple,
+)
+Array = jnp.ndarray
+Batch = Mapping[str, np.ndarray]
 
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""
@@ -15,6 +26,29 @@ def jax_lexpand(A, *dimensions):
     A = A[jnp.newaxis, ...]
     A = jnp.broadcast_to(A, shape)
     return A
+
+
+def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
+    """Helper function for loading and preparing tfds splits."""
+    ds = split
+    ds = ds.shuffle(buffer_size=10 * batch_size)
+    ds = ds.batch(batch_size)
+    ds = ds.prefetch(buffer_size=1000)
+    ds = ds.repeat()
+    return iter(tfds.as_numpy(ds))
+
+
+def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
+    """Helper function for preparing tfds splits for use in fliax."""
+    # TODO: add length arguments to function.
+    # Batch is [y, thetas, d]
+    data = batch.astype(np.float32)
+    x = data[:, :len_x]
+    cond_data = data[:, len_x:]
+    theta = cond_data[:, :-len_x]
+    d = cond_data[:, -len_x:-len_xi]
+    xi = cond_data[:, -len_xi:]
+    return x, theta, d, xi
 
 
 @hk.without_apply_rng
