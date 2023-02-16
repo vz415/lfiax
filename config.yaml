@@ -1,142 +1,48 @@
-# defaults:
-  # - hydra/sweeper: ax
-  # - override hydra/launcher: ray
-#   - hydra/launcher: submitit_slurm
-
-# ---- Specify Hyperparameters -----
-# Number of design optimization rounds
 seed: 0
-num_design_rounds: 2
-num_seeds: 1
 
-# HyperParameters that main sbidoe function uses - change these
-# ----------- MINEBED ----------
-OED:
-  design_dims: 1       # Number of designs for minebed to optimize
-  DATASIZE: 5000       # For minebed design optimization sampling
-  BATCHSIZE: ${OED.DATASIZE}  # * Needs to be leq to DATASIZE for bayesopt routine *
-  N_EPOCH: 10000
-  BO_INIT_NUM: 5
-  BO_MAX_NUM: 1        # Number of bayesOpt optimization rounds to perform
-  dom_min: 0.000001
-  dom_max: 1000
-  # TODO: Make these optimizable by hydra
-  NN_layers: 1              # Number of nn layers for MINE nn
-  NN_hidden: 50 #50        # Number of neurons/nn layer in MINE
-  prior_ys: False
-  #TODO: Add BayesOpt jitter as sbidoe parameter
-  jitter: 0.01
-  optim:
-    # TODO: Make these accessible to the MINEBED module
-    _target_: torch.optim.Adam
-    learning_rate: 1e-3
-    sch:
-      _target_: torch.StepLR
-      step_size: 1000
-      gamma: 0.95
+contrastive_sampling:
+  M: 10
+  N: 100
 
-# ---------- OLD SBI Hyperparams ------------
-SBI:
-  num_sbi_sims: 1000    # Number of simulations for sbi to perform
-  num_sbi_rounds: 5    # Number of simulation rounds for sbi to perform
-  # TODO: Make choice of normalizing flow & sampler accessible
-  type_SBI: 'snle' # either `snpe`, `snle`, or 'snre`'
-  normalizing_flow: 'nsf'
-  default_flow: True
-  nsf: 
-    hidden_features: 150
-    num_transforms: 5
-    num_bins: 10
-    tail_bound: 3.0
-    hidden_layers_spline_context: 1
-    num_blocks: 2
-    dropout_probability: 0.
-    use_batch_norm: False
-    # TODO: Add embedding net
-  mdn:
-    hidden_features: 50
-    num_components: 10
-    # TODO: Add embedding net
-  made:
-    hidden_features: 50
-    num_mixture_components: 10
-    # TODO: Add embedding net
-  maf:
-    hidden_features: 50
-    num_transforms: 5
-    num_blocks: 2
-    dropout_probability: 0.
-    use_batch_norm: False
-    # TODO: Add embedding net
+designs:
+  d: null
+  # d_data_path: ${${designs.d} if ${designs.d} is not None else 'null'}
+  xi: 0.
 
-  sampling: 'rejection' # Other choices are MCMC & VI
-  # TODO: Pass custom parameters to rejection/mcmc sampling
+param_shapes:
+  theta_shape: 2
+  event_dim: 1
 
-# ------ Specify BMP Model ------
-# Choice for BMP simulator parameters
-models:
-  onestep:
-    theta_true: [0.6693, 0.9603]
-    name: 'onestep'
+flow_params:
+  num_layers: 5
+  mlp_num_layers: 4
+  mlp_hidden_size: 128
+  num_bins: 4
 
-  twostep:
-    theta_true: [0.6693, 0.3948, 0.9603]
-    name: 'twostep'
+optimization_params:
+  learning_rate: 1e-4
+  training_steps: 100
+  lambda_: 0.99
 
-BMP:
-  model_size: (1,1,1) # Is this allowed? How do I make it workable?
-  model: 'twostep' # ${onestep}  # user can change this via `$python main.py +BMP.model=twostep`
-  fixed_receptor: True
+lagrange_weight_sch:
+  use:
+  decay: False
+  sigmoid: False
+  # name: ${'decay' if lagrange_weight_sch.decay else 'sigmoid' if lagrange_weight_sch.sigmoid else 'None'}
+  sigmoid_params:
+    slope: 10.
 
-# ----------- BMA Params -------------
-BMA:
-  BF1: 0.5
-  BF2: 0.5
-  marg_prob_sims: 1000
-
-# ----------- BMA fun Params -------------
-BMA_fun:
-    _target_: sbidoeman.bma.bayes_two_model_avg
-    num_sbi_sims: 500
-    num_sbi_rounds: 2
-    type_sbi: 'snle'
-    normalizing_flow: 'nsf'
-    default_flow: 'nsf'
-
-# ----------- sbidoeman Hyperparams -----------
-SDM:
-  BMA: True
-  control: False
-  random: False
-  num_designs: 5
-  noise_type: None
-  noise_mag: None
-  
-# ----------- Marginal Prob Flow Params ------------
-marg_prob_flow:
-    _target_: sbidoeman.marg_prob.marg_prob_flow #.marg_prob
-    flow_num_layers: 8
-    mlp_num_layers: 4
-    hidden_size: 500
-    num_bins: 8
-    batch_size: 1024
-    learning_rate: 1e-4
-    eval_frequency: 10
-    training_steps: 200
-
-
-# ---- Hydra Params ----- 
 hydra:
-  # run:
-  #   dir: ./data/${BMP.model}/${SDM.control}/${SDM.random}/${models[${BMP.model}].theta_true}/${SDM.noise_type}/${SDM.BMA}/${now:%Y.%m.%d.%H.%M}
-  #   subdir: ${hydra.job.num}/${seed}
-# ---- Parallel Scheduler ----
-  sweep:
-    dir: ./data/${BMP.model}/${SDM.control}/${SDM.random}/${models[${BMP.model}].theta_true}/${SDM.noise_type}/${SDM.BMA}/${now:%Y.%m.%d.%H.%M}
-    subdir: ${hydra.job.num}/${seed}
-  # launcher:
-  #   ray:
-  #     init:
-        # num_cpus: 12
-        # num_gpus: null
-      #  address: null
+  run:
+    # TODO: Check that xi dimensionality is preserved
+    dir: ./data/${designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+    # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+    # subdir: ${hydra.job.num}/${seed}
+
+
+
+# hydra:
+#   run:
+#     # TODO: Check that xi dimensionality is preserved
+#     dir: ./data/${'null' if not ${designs.d} else ${designs.d}}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.name}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+#     subdir: ${hydra.job.num}/${seed}

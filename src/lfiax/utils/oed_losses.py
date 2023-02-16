@@ -52,31 +52,37 @@ def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10
 
 
 @partial(jax.jit, static_argnums=[2,4,5])
-def lfi_pce_eig_scan(params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10):
+def lfi_pce_eig_scan(params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10, lambda_: float=0.99):
     """
     Calculates PCE loss using jax.lax.scan to accelerate.
+
+    Modified with a lagrangian loss term that shifts from focusing on training the flow
+    to optimizing the design.
     """
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
-            contrastive_lp = log_prob_fun(x, theta)
+            contrastive_lp = log_prob_fun(flow_params, x, theta, xi)
             contrastive_lps += jnp.exp(contrastive_lp)
             return contrastive_lps, i + 1
         result = jax.lax.scan(scan_fun, conditional_lp, jnp.array(range(M)))
         return jnp.log(result[0])
 
     keys = jrandom.split(prng_key, 1 + M)
-    # xi = params['xi']
+    xi = jnp.asarray(params['xi'])
+    xi = jnp.broadcast_to(xi, (N, len(xi)))
+    flow_params = {k: v for k, v in params.items() if k != 'xi'}
 
     # simulate the outcomes before finding their log_probs
     x, theta_0 = sim_linear_data_vmap(designs, N, keys[0])
 
-    conditional_lp = log_prob_fun(x, theta_0)
+    conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp)
 
     # First part is PCE loss, second is flow's loss
-    return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
+    loss = (1 - lambda_) * jnp.sum(marginal_lp - conditional_lp) + lambda_ * -jnp.mean(conditional_lp)
+    return loss
 
 
 @partial(jax.jit, static_argnums=[2,3])

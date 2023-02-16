@@ -138,5 +138,8 @@ dmypy.json
 # Sbi stuff
 *sbi-logs/
 
+# Data logging stuff
+*.data/
+
 # VS Studio stuff
 *.vscode
