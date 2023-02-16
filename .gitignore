@@ -143,3 +143,9 @@ dmypy.json
 
 # VS Studio stuff
 *.vscode
+
+# pickle flies
+*.pkl
+
+# csvs
+*.csv
