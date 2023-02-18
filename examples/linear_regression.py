@@ -1,6 +1,6 @@
 import omegaconf
 import hydra
-import wandb
+# import wandb
 from collections import deque
 import os
 import csv, time
@@ -43,10 +43,6 @@ OptState = Any
 
 class Workspace:
     def __init__(self, cfg):
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # self.wandb.config = wandb.config
         self.cfg = cfg
 
         self.work_dir = os.getcwd()
@@ -130,17 +126,10 @@ class Workspace:
             )
             return model.log_prob(data, theta, xi)
 
-        # TODO: Check if this is even legal
         self.log_prob = log_prob
 
 
     def run(self) -> Callable:
-        wandb.config = omegaconf.OmegaConf.to_container(
-            self.cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.init(entity=self.cfg.wandb.entity, project=self.cfg.wandb.project, config=wandb.config)
-        
-
         logf, writer = self._init_logging()
         tic = time.time()
 
@@ -149,10 +138,8 @@ class Workspace:
             params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
-            # xi_broadcast = jnp.broadcast_to(params["xi"], (N, len(xi)))
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
-            # Bingo. This is where to change data generation process
             loss, grads = jax.value_and_grad(lfi_pce_eig_scan)(
                 params, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
             updates, new_opt_state = optimizer.update(grads, opt_state)
@@ -197,8 +184,6 @@ class Workspace:
             self.xi = params['xi']
             self.xi_grads = xi_grads
             self.loss = loss
-
-            wandb.log({"loss": loss, "xi": self.xi, "xi_grads": xi_grads})
 
             writer.writerow({
                 'step': step, 
