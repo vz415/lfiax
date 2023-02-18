@@ -1,7 +1,11 @@
 seed: 0
 
+wandb:
+  entity: vz_uci
+  project: lfiax_lf-pce
+
 contrastive_sampling:
-  M: 10
+  M: 100
   N: 100
 
 designs:
@@ -21,12 +25,12 @@ flow_params:
 
 optimization_params:
   learning_rate: 1e-4
-  training_steps: 100
+  training_steps: 2000
   lambda_: 0.99
 
 lagrange_weight_sch:
   use:
-  decay: False
+  decay: True
   sigmoid: False
   # name: ${'decay' if lagrange_weight_sch.decay else 'sigmoid' if lagrange_weight_sch.sigmoid else 'None'}
   sigmoid_params:
@@ -39,10 +43,3 @@ hydra:
     # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
     # subdir: ${hydra.job.num}/${seed}
 
-
-
-# hydra:
-#   run:
-#     # TODO: Check that xi dimensionality is preserved
-#     dir: ./data/${'null' if not ${designs.d} else ${designs.d}}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.name}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
-#     subdir: ${hydra.job.num}/${seed}

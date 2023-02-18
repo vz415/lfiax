@@ -1,5 +1,6 @@
-from omegaconf import DictConfig, OmegaConf
+import omegaconf
 import hydra
+import wandb
 from collections import deque
 import os
 import csv, time
@@ -42,6 +43,10 @@ OptState = Any
 
 class Workspace:
     def __init__(self, cfg):
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # self.wandb.config = wandb.config
         self.cfg = cfg
 
         self.work_dir = os.getcwd()
@@ -130,6 +135,12 @@ class Workspace:
 
 
     def run(self) -> Callable:
+        wandb.config = omegaconf.OmegaConf.to_container(
+            self.cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.init(entity=self.cfg.wandb.entity, project=self.cfg.wandb.project, config=wandb.config)
+        
+
         logf, writer = self._init_logging()
         tic = time.time()
 
@@ -186,6 +197,8 @@ class Workspace:
             self.xi = params['xi']
             self.xi_grads = xi_grads
             self.loss = loss
+
+            wandb.log({"loss": loss, "xi": self.xi, "xi_grads": xi_grads})
 
             writer.writerow({
                 'step': step, 
