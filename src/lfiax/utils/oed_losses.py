@@ -46,13 +46,15 @@ def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10
     conditional_lp = log_prob.apply(flow_params, x, theta_0, xi_broadcast)
 
     # conditional_lp could be the initial starting state that is added upon... 
-    marginal_lp = compute_marginal(M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp)
+    marginal_lp = compute_marginal(
+        M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp
+        ) - jnp.log(M+1)
 
     return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
 
 
-@partial(jax.jit, static_argnums=[2,4,5])
-def lfi_pce_eig_scan(params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10, lambda_: float=0.99):
+@partial(jax.jit, static_argnums=[3,5,6])
+def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10, lambda_: float=0.99):
     """
     Calculates PCE loss using jax.lax.scan to accelerate.
 
@@ -69,20 +71,25 @@ def lfi_pce_eig_scan(params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callabl
         return jnp.log(result[0])
 
     keys = jrandom.split(prng_key, 1 + M)
-    xi = jnp.asarray(params['xi'])
+    # xi = jnp.asarray(params['xi'])
+    # xi = jnp.asarray([xi_params['xi']])
+    xi = xi_params
     xi = jnp.broadcast_to(xi, (N, len(xi)))
-    flow_params = {k: v for k, v in params.items() if k != 'xi'}
+    # flow_params = {k: v for k, v in params.items() if k != 'xi'}
 
     # simulate the outcomes before finding their log_probs
     x, theta_0 = sim_linear_data_vmap(designs, N, keys[0])
 
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
-    marginal_lp = compute_marginal_lp(keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp)
+    marginal_lp = compute_marginal_lp(
+        keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp
+        ) - jnp.log(M+1)
 
     # First part is PCE loss, second is flow's loss
-    loss = (1 - lambda_) * jnp.sum(marginal_lp - conditional_lp) + lambda_ * -jnp.mean(conditional_lp)
-    return loss
+    # loss = (1 - lambda_) * -jnp.sum(marginal_lp - conditional_lp) + lambda_ * -jnp.mean(conditional_lp)
+    EIG = jnp.sum(conditional_lp - marginal_lp) #- jnp.mean(conditional_lp)
+    return - EIG
 
 
 @partial(jax.jit, static_argnums=[2,3])

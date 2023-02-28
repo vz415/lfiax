@@ -19,14 +19,19 @@ def scalar_conditioner_mlp(
         def __call__(self, x, theta, xi):
             """z represents the conditioned values."""
             if standardize_theta:
-                theta = (theta - theta.mean(axis=0)) / (theta.std(axis=0) + 1e-14)
+                theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((theta, xi), axis=1)
             if resnet:
-                for hidden in hidden_sizes:
-                    z = hk.nets.MLP([hidden], activate_final=True)(z)
-                    z += hk.Linear(hidden)(hk.Flatten()(z))
+                for i, hidden in enumerate(hidden_sizes):
+                    z_temp = hk.nets.MLP([hidden], activate_final=True)(z)
+                    if i > 0: 
+                        z += z_temp
+                        z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(z)
+                    else: 
+                        z = z_temp
+                        z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(z)
             else:
                 z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
             z = hk.Linear(

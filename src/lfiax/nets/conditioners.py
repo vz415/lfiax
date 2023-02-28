@@ -20,16 +20,21 @@ def conditioner_mlp(
             """x represents data and z its conditional values."""
             if standardize_theta:
                 # Normalize the conditioned values
-                theta = (theta - theta.mean(axis=0)) / (theta.std(axis=0) + 1e-14)
+                theta = hk.BatchNorm(theta)
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
             theta = hk.Flatten()(theta)
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((theta, xi), axis=1)
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
-                for hidden in hidden_sizes:
-                    x = hk.nets.MLP([hidden], activate_final=True)(x)
-                    x += hk.Linear(hidden)(hk.Flatten()(x))
+                for i, hidden in enumerate(hidden_sizes):
+                    x_temp = hk.nets.MLP([hidden], activate_final=True)(x)
+                    if i > 0: 
+                        x += x_temp
+                        # x = hk.BatchNorm()(x)
+                    else: 
+                        x = x_temp
+                        # x = hk.BatchNorm()(x)
             else:
                 x = hk.nets.MLP(hidden_sizes, activate_final=True)(x)
             x = hk.Linear(

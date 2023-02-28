@@ -1,3 +1,8 @@
+defaults:
+  - override hydra/sweeper: nevergrad
+
+version: '0.0.1'
+
 seed: 0
 
 wandb:
@@ -5,8 +10,8 @@ wandb:
   project: lfiax_lf-pce
 
 contrastive_sampling:
-  M: 100
-  N: 100
+  M: 10
+  N: 10
 
 designs:
   d: null
@@ -24,8 +29,9 @@ flow_params:
   num_bins: 4
 
 optimization_params:
-  learning_rate: 1e-4
-  training_steps: 2000
+  learning_rate: 1e-3
+  xi_learning_rate: 1e-2
+  training_steps: 1000
   lambda_: 0.99
 
 lagrange_weight_sch:
@@ -37,9 +43,26 @@ lagrange_weight_sch:
     slope: 10.
 
 hydra:
-  run:
+  # run:
+  sweep:
     # TODO: Check that xi dimensionality is preserved
-    dir: ./data/${designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+    dir: ./data/${version}
     # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
     # subdir: ${hydra.job.num}/${seed}
+    subdir: ${hydra.job.override_dirname}
+  sweeper:
+    optim:
+      optimizer: RandomSearch
+      budget: 5
+      num_workers: 5
+    parametrization:
+      contrastive_sampling.M:
+        lower: 10
+        upper: 15
+        integer: true
+      contrastive_sampling.N:
+        lower: 98
+        upper: 102
+        integer: true
+
 

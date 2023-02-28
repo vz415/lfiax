@@ -1,6 +1,7 @@
 import omegaconf
 import hydra
-# import wandb
+from hydra.core.hydra_config import HydraConfig
+import wandb
 from collections import deque
 import os
 import csv, time
@@ -44,6 +45,15 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -76,6 +86,7 @@ class Workspace:
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
+        self.xi_learning_rate = self.cfg.optimization_params.xi_learning_rate
         self.training_steps = self.cfg.optimization_params.training_steps
         self.lambda_ = self.cfg.optimization_params.lambda_
 
@@ -130,21 +141,36 @@ class Workspace:
 
 
     def run(self) -> Callable:
-        logf, writer = self._init_logging()
+        # logf, writer = self._init_logging()
         tic = time.time()
 
-        @partial(jax.jit, static_argnums=[3,4])
+        @partial(jax.jit, static_argnums=[4,5])
         def update_pce(
-            params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
+            # params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
-            loss, grads = jax.value_and_grad(lfi_pce_eig_scan)(
-                params, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
-            updates, new_opt_state = optimizer.update(grads, opt_state)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss, grads['xi']
+            # loss, grads = jax.value_and_grad(lfi_pce_eig_scan)(
+            #     params, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
+            # xi = jnp.asarray([xi_params['xi']])
+            # xi = jnp.broadcast_to(xi_params['xi'], (N, len(xi_params['xi'])))
+            # breakpoint()
+            xi = xi_params
+            loss, grads = jax.value_and_grad(lfi_pce_eig_scan, argnums=[0,1])(
+                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
+            # grads is now a tuple
+            updates, new_opt_state = optimizer.update(grads[0], opt_state)
+            xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
+
+            # Is there a more efficient way to do this?
+            # flow_params = {key: value for key, value in params.items() if key != 'xi'}
+
+            new_params = optax.apply_updates(flow_params, updates)
+            new_xi_params = optax.apply_updates(xi_params, xi_updates)
+
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates #updates['xi']
         
          # Initialize the params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -154,16 +180,21 @@ class Workspace:
             np.zeros((1, *self.theta_shape)),
             np.zeros((1, *self.xi_shape)),
         )
-        # This could be initialized by a distribution of designs!
-        params['xi'] = self.xi
 
         optimizer = optax.adam(self.learning_rate)
-
         opt_state = optimizer.init(params)
+        
+        # This could be initialized by a distribution of designs!
+        params['xi'] = self.xi
+        xi_params = params['xi']
+        optimizer2 = optax.adam(self.xi_learning_rate)
+        opt_state_xi = optimizer2.init(xi_params)
+
+        flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            params, opt_state, loss, xi_grads = update_pce(
-                params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
+            flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates = update_pce(
+                flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
             )
             
             # Update d_sim vector
@@ -178,26 +209,28 @@ class Workspace:
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {params['xi']}; Xi Grads: {xi_grads}; \
-             Loss: {loss}")
+            print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Grads: {xi_grads}; Xi Updates: {xi_updates}; Loss: {loss}")
 
             self.xi = params['xi']
             self.xi_grads = xi_grads
             self.loss = loss
 
-            writer.writerow({
-                'step': step, 
-                'xi': float(self.xi),
-                'xi_grads': float(self.xi_grads),
-                'loss': float(self.loss),
-                'time':float(run_time)
-            })
-            logf.flush()
-            self.save('latest')
+            # wandb.log({"loss": loss, "xi": params["xi"], "xi_grads": xi_grads})
+
+            # writer.writerow({
+            #     'step': step, 
+            #     'xi': float(self.xi),
+            #     'xi_grads': float(self.xi_grads),
+            #     'loss': float(self.loss),
+            #     'time':float(run_time)
+            # })
+            # logf.flush()
+            # self.save('latest')
 
 
     def save(self, tag='latest'):
-        path = os.path.join(self.work_dir, f'{tag}.pkl')
+        pass
+        path = HydraConfig.get().runtime.output_dir
         # Creating a dictionary from the values since there is pickling error
         # when trying to pickle the entire object
         save_dict = {
@@ -209,7 +242,11 @@ class Workspace:
             pkl.dump(save_dict, f)
 
     def _init_logging(self):
-        path = os.path.join(self.work_dir, 'log.csv')
+        '''
+        This function writes a csv to the working directory.
+        '''
+        pass
+        path = os.path.join(HydraConfig.get().runtime.output_dir, 'log.csv')
         logf = open(path, 'a') 
         fieldnames = ['step', 'xi', 'xi_grads', 'loss', 'time']
         writer = csv.DictWriter(logf, fieldnames=fieldnames)
