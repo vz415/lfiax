@@ -152,25 +152,19 @@ class Workspace:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
-            # loss, grads = jax.value_and_grad(lfi_pce_eig_scan)(
-            #     params, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
-            # xi = jnp.asarray([xi_params['xi']])
-            # xi = jnp.broadcast_to(xi_params['xi'], (N, len(xi_params['xi'])))
-            # breakpoint()
+            
             xi = xi_params
-            loss, grads = jax.value_and_grad(lfi_pce_eig_scan, argnums=[0,1])(
+            
+            (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
                 flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
-            # grads is now a tuple
+            
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-
-            # Is there a more efficient way to do this?
-            # flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
 
-            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates #updates['xi']
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise #updates['xi']
         
          # Initialize the params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -193,9 +187,14 @@ class Workspace:
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates = update_pce(
+            flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
                 flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
             )
+
+            # Calculate the KL-div before updating designs
+            # TODO: jit to speed up.
+            log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
+            kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
             # Update d_sim vector
             self.d_sim = jnp.concatenate((self.d, params['xi']), axis=0)
@@ -209,7 +208,7 @@ class Workspace:
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Grads: {xi_grads}; Xi Updates: {xi_updates}; Loss: {loss}")
+            print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Updates: {xi_updates}; Loss: {loss}; KL Div: {kl_div}; ")
 
             self.xi = params['xi']
             self.xi_grads = xi_grads
@@ -222,6 +221,7 @@ class Workspace:
             #     'xi': float(self.xi),
             #     'xi_grads': float(self.xi_grads),
             #     'loss': float(self.loss),
+            #     'kl_div': float(kl_div),
             #     'time':float(run_time)
             # })
             # logf.flush()

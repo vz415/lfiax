@@ -71,14 +71,11 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
         return jnp.log(result[0])
 
     keys = jrandom.split(prng_key, 1 + M)
-    # xi = jnp.asarray(params['xi'])
-    # xi = jnp.asarray([xi_params['xi']])
     xi = xi_params
     xi = jnp.broadcast_to(xi, (N, len(xi)))
-    # flow_params = {k: v for k, v in params.items() if k != 'xi'}
 
     # simulate the outcomes before finding their log_probs
-    x, theta_0 = sim_linear_data_vmap(designs, N, keys[0])
+    x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
 
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
@@ -86,10 +83,9 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
         keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp
         ) - jnp.log(M+1)
 
-    # First part is PCE loss, second is flow's loss
-    # loss = (1 - lambda_) * -jnp.sum(marginal_lp - conditional_lp) + lambda_ * -jnp.mean(conditional_lp)
-    EIG = jnp.sum(conditional_lp - marginal_lp) #- jnp.mean(conditional_lp)
-    return - EIG
+    EIG = jnp.sum(conditional_lp - marginal_lp)
+    # Need to return conditional_lp to check KL-div...
+    return - EIG, (conditional_lp, theta_0, x_noiseless, noise)
 
 
 @partial(jax.jit, static_argnums=[2,3])

@@ -74,13 +74,15 @@ def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
         seed=keys[1], sample_shape=[len(d), len(priors)]
     )
 
+    sigma = n_g + jnp.squeeze(n_n)
+
     # perform forward pass
     y = jnp.broadcast_to(priors[:, 0], (len(d), len(priors)))
     y = y + jnp.expand_dims(d, 1) @ jnp.expand_dims(priors[:, 1], 0)
-    y = y + n_g + jnp.squeeze(n_n)
+    y = y + sigma
     ygrads = priors[:, 1]
 
-    return y, ygrads
+    return y, ygrads, sigma
 
 
 def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
@@ -172,12 +174,15 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
         seed=keys[2], sample_shape=[len(d), len(priors)]
     )
 
+    sigma = n_g + jnp.squeeze(n_n)
+
     # perform forward pass
     y = jax.vmap(partial(jnp.dot, priors[:, 0]))(d)
-    y = jax.vmap(partial(jnp.add, priors[:, 1]))(y) + n_g + jnp.squeeze(n_n)
+    y = jax.vmap(partial(jnp.add, priors[:, 1]))(y) 
+    y_noised = y + sigma
     ygrads = priors[:, 1]
 
-    return y.T, jnp.squeeze(priors)
+    return y_noised.T, jnp.squeeze(priors), y, sigma
 
 
 def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
