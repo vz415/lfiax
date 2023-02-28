@@ -1,6 +1,7 @@
 import omegaconf
 import hydra
-# import wandb
+from hydra.core.hydra_config import HydraConfig
+import wandb
 from collections import deque
 import os
 import csv, time
@@ -44,6 +45,16 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
+
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -130,7 +141,7 @@ class Workspace:
 
 
     def run(self) -> Callable:
-        logf, writer = self._init_logging()
+        # logf, writer = self._init_logging()
         tic = time.time()
 
         @partial(jax.jit, static_argnums=[3,4])
@@ -185,19 +196,24 @@ class Workspace:
             self.xi_grads = xi_grads
             self.loss = loss
 
-            writer.writerow({
-                'step': step, 
-                'xi': float(self.xi),
-                'xi_grads': float(self.xi_grads),
-                'loss': float(self.loss),
-                'time':float(run_time)
-            })
-            logf.flush()
-            self.save('latest')
+            wandb.log({"loss": loss, "xi": params["xi"], "xi_grads": xi_grads})
+
+            # writer.writerow({
+            #    'step': step, 
+            #    'xi': float(self.xi),
+            #    'xi_grads': float(self.xi_grads),
+            #    'loss': float(self.loss),
+            #    'time':float(run_time)
+            # })
+            # logf.flush()
+            # self.save('latest')
+
 
 
     def save(self, tag='latest'):
-        path = os.path.join(self.work_dir, f'{tag}.pkl')
+        pass
+        # path = os.path.join(self.work_dir, f'{tag}.pkl')
+        path = HydraConfig.get().runtime.output_dir
         # Creating a dictionary from the values since there is pickling error
         # when trying to pickle the entire object
         save_dict = {
@@ -209,7 +225,8 @@ class Workspace:
             pkl.dump(save_dict, f)
 
     def _init_logging(self):
-        path = os.path.join(self.work_dir, 'log.csv')
+        #path = os.path.join(self.work_dir, 'log.csv')
+        path = os.path.join(HydraConfig.get().runtime.output_dir, 'log.csv')
         logf = open(path, 'a') 
         fieldnames = ['step', 'xi', 'xi_grads', 'loss', 'time']
         writer = csv.DictWriter(logf, fieldnames=fieldnames)
@@ -221,7 +238,7 @@ class Workspace:
 
 from linear_regression import Workspace as W
 
-@hydra.main(version_base=None, config_path="..", config_name="config")
+@hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
     fname = os.getcwd() + '/latest.pt'
     if os.path.exists(fname):

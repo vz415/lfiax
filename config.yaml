@@ -1,3 +1,9 @@
+defaults:
+  - override hydra/launcher: submitit_slurm
+  - override hydra/sweeper: nevergrad
+
+version: '0.0.1'
+
 seed: 0
 
 wandb:
@@ -5,7 +11,7 @@ wandb:
   project: lfiax_lf-pce
 
 contrastive_sampling:
-  M: 100
+  M: 10
   N: 100
 
 designs:
@@ -25,7 +31,7 @@ flow_params:
 
 optimization_params:
   learning_rate: 1e-4
-  training_steps: 2000
+  training_steps: 20
   lambda_: 0.99
 
 lagrange_weight_sch:
@@ -37,9 +43,40 @@ lagrange_weight_sch:
     slope: 10.
 
 hydra:
-  run:
+        #run:
+  sweep:
     # TODO: Check that xi dimensionality is preserved
-    dir: ./data/${designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+    dir: ./data/${version}
     # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
     # subdir: ${hydra.job.num}/${seed}
+    subdir: ${hydra.job.override_dirname}
+  launcher:
+    max_num_timeout: 10
+    timeout_min: 4
+    partition: free
+    account: eehui_lab
+    # nodes: 1
+    # array_parallelism: 5
+    # ntasks: 1
+    # cpus-per-task: 1
+    # array: "1:5"
+    # mail-type: "fail, end"
+    # mail-user: "vzaballa@uci.edu"
+    # comment: ICML
+    # mem_gb: 64
+    # gpus_per_node: 1
+  sweeper:
+    optim:
+      optimizer: RandomSearch
+      budget: 10
+      num_workers: 10
+    parametrization:
+      contrastive_sampling.M:
+        lower: 5
+        upper: 15
+        integer: true
+      contrastive_sampling.N:
+        lower: 98
+        upper: 102
+        integer: true
 
