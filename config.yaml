@@ -31,8 +31,8 @@ flow_params:
 
 optimization_params:
   learning_rate: 1e-3
-  xi_learning_rate: 1e-2
-  training_steps: 1000
+  xi_learning_rate: 1e-3
+  training_steps: 10000
   lambda_: 0.99
 
 lagrange_weight_sch:
@@ -69,15 +69,11 @@ hydra:
   sweeper:
     optim:
       optimizer: RandomSearch
-      budget: 5
-      num_workers: 5
+      budget: 4
+      num_workers: 4
     parametrization:
-      contrastive_sampling.M:
-        lower: 10
-        upper: 15
-        integer: true
-      contrastive_sampling.N:
-        lower: 98
-        upper: 102
-        integer: true
+      contrastive_sampling.M: [10, 50, 100]
+      contrastive_sampling.N: [10, 50, 100]
+      optimization_params.learning_rate: [1e-1, 1e-2, 1e-3, 1e-4]
+      optimization_params.xi_learning_rate: [1e-1, 1e-2, 1e-3, 1e-4]
 
