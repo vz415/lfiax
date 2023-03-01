@@ -45,16 +45,6 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
-
         wandb.config = omegaconf.OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
             )
@@ -202,12 +192,18 @@ class Workspace:
             )
 
             # Calculate the KL-div before updating designs
-            # TODO: jit to speed up.
+            # TODO: Make sure `MultivariateNormalDiag` is right distribution & implementation
             log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
             kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
+            # TODO: Make more robust bounding range for designs
+            if xi_params > jnp.array([10.]):
+                xi_params = jnp.array([10.])
+            elif xi_params < jnp.array([-10.]):
+                xi_params = jnp.array([-10.])
+
             # Update d_sim vector
-            self.d_sim = jnp.concatenate((self.d, params['xi']), axis=0)
+            self.d_sim = jnp.concatenate((self.d, xi_params), axis=0)
             
             if self.weight_schedule:
                 if self.cfg.lagrange_weight_sch.decay:
@@ -220,12 +216,11 @@ class Workspace:
             # Saving contents to file
             print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Updates: {xi_updates}; Loss: {loss}; KL Div: {kl_div}; ")
 
-            self.xi = params['xi']
+            self.xi = xi_params
             self.xi_grads = xi_grads
             self.loss = loss
 
-
-            # wandb.log({"loss": loss, "xi": params["xi"], "xi_grads": xi_grads})
+            wandb.log({"loss": loss, "xi": xi_params, "xi_grads": xi_grads, "kl_divs": kl_div})
 
             # writer.writerow({
             #     'step': step, 
@@ -241,7 +236,6 @@ class Workspace:
 
     def save(self, tag='latest'):
         pass
-        # path = os.path.join(self.work_dir, f'{tag}.pkl')
         path = HydraConfig.get().runtime.output_dir
         # Creating a dictionary from the values since there is pickling error
         # when trying to pickle the entire object
@@ -270,7 +264,7 @@ class Workspace:
 
 from linear_regression import Workspace as W
 
-@hydra.main(version_base=None, config_path=".", config_name="config")
+@hydra.main(version_base=None, config_path="..", config_name="config")
 def main(cfg):
     fname = os.getcwd() + '/latest.pt'
     if os.path.exists(fname):
@@ -288,3 +282,4 @@ def main(cfg):
 
 if __name__ == "__main__":
     main()
+
