@@ -45,6 +45,15 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         wandb.config = omegaconf.OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
@@ -87,6 +96,7 @@ class Workspace:
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
+        self.xi_learning_rate = self.cfg.optimization_params.xi_learning_rate
         self.training_steps = self.cfg.optimization_params.training_steps
         self.lambda_ = self.cfg.optimization_params.lambda_
 
@@ -144,18 +154,27 @@ class Workspace:
         # logf, writer = self._init_logging()
         tic = time.time()
 
-        @partial(jax.jit, static_argnums=[3,4])
+        @partial(jax.jit, static_argnums=[4,5])
         def update_pce(
-            params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
+            # params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
-            loss, grads = jax.value_and_grad(lfi_pce_eig_scan)(
-                params, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
-            updates, new_opt_state = optimizer.update(grads, opt_state)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state, loss, grads['xi']
+            
+            xi = xi_params
+            
+            (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
+                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
+            
+            updates, new_opt_state = optimizer.update(grads[0], opt_state)
+            xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
+
+            new_params = optax.apply_updates(flow_params, updates)
+            new_xi_params = optax.apply_updates(xi_params, xi_updates)
+
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise #updates['xi']
         
          # Initialize the params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -165,17 +184,27 @@ class Workspace:
             np.zeros((1, *self.theta_shape)),
             np.zeros((1, *self.xi_shape)),
         )
-        # This could be initialized by a distribution of designs!
-        params['xi'] = self.xi
 
         optimizer = optax.adam(self.learning_rate)
-
         opt_state = optimizer.init(params)
+        
+        # This could be initialized by a distribution of designs!
+        params['xi'] = self.xi
+        xi_params = params['xi']
+        optimizer2 = optax.adam(self.xi_learning_rate)
+        opt_state_xi = optimizer2.init(xi_params)
+
+        flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            params, opt_state, loss, xi_grads = update_pce(
-                params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
+            flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
+                flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
             )
+
+            # Calculate the KL-div before updating designs
+            # TODO: jit to speed up.
+            log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
+            kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
             # Update d_sim vector
             self.d_sim = jnp.concatenate((self.d, params['xi']), axis=0)
@@ -189,25 +218,25 @@ class Workspace:
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {params['xi']}; Xi Grads: {xi_grads}; \
-             Loss: {loss}")
+            print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Updates: {xi_updates}; Loss: {loss}; KL Div: {kl_div}; ")
 
             self.xi = params['xi']
             self.xi_grads = xi_grads
             self.loss = loss
 
-            wandb.log({"loss": loss, "xi": params["xi"], "xi_grads": xi_grads})
+
+            # wandb.log({"loss": loss, "xi": params["xi"], "xi_grads": xi_grads})
 
             # writer.writerow({
-            #    'step': step, 
-            #    'xi': float(self.xi),
-            #    'xi_grads': float(self.xi_grads),
-            #    'loss': float(self.loss),
-            #    'time':float(run_time)
+            #     'step': step, 
+            #     'xi': float(self.xi),
+            #     'xi_grads': float(self.xi_grads),
+            #     'loss': float(self.loss),
+            #     'kl_div': float(kl_div),
+            #     'time':float(run_time)
             # })
             # logf.flush()
             # self.save('latest')
-
 
 
     def save(self, tag='latest'):
@@ -225,7 +254,10 @@ class Workspace:
             pkl.dump(save_dict, f)
 
     def _init_logging(self):
-        #path = os.path.join(self.work_dir, 'log.csv')
+        '''
+        This function writes a csv to the working directory.
+        '''
+        pass
         path = os.path.join(HydraConfig.get().runtime.output_dir, 'log.csv')
         logf = open(path, 'a') 
         fieldnames = ['step', 'xi', 'xi_grads', 'loss', 'time']
