@@ -45,15 +45,15 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -62,16 +62,19 @@ class Workspace:
 
         if not self.cfg.designs.d:
             self.d = jnp.array([])
+            self.xi = jnp.array([self.cfg.designs.xi])
+            self.d_sim = self.xi # jnp.array([self.cfg.designs.xi])
         else:
             self.d = jnp.array(self.cfg.designs.d)
-        self.xi = jnp.array([self.cfg.designs.xi])
-        self.d_sim = jnp.concatenate((self.d, self.xi), axis=0)
+            self.xi = jnp.array([self.cfg.designs.xi])
+            self.d_sim = jnp.concatenate((self.d, self.xi), axis=0)
 
         # Bunch of event shapes needed for various functions
-        len_xi = len(self.xi)
+        # len_xi = len(self.xi)
+        len_xi = self.xi.shape[-1]
         self.xi_shape = (len_xi,)
         self.theta_shape = (2,)
-        self.EVENT_SHAPE = (len(self.d_sim),)
+        self.EVENT_SHAPE = (self.d_sim.shape[-1],)
         EVENT_DIM = self.cfg.param_shapes.event_dim
 
         # contrastive sampling parameters
@@ -89,32 +92,6 @@ class Workspace:
         self.xi_learning_rate = self.cfg.optimization_params.xi_learning_rate
         self.training_steps = self.cfg.optimization_params.training_steps
         self.lambda_ = self.cfg.optimization_params.lambda_
-
-        @jax.jit
-        def lagrange_weight_schedule_decay(iteration, decay_rate=0.99):
-            """
-            Returns the Lagrange multiplier weight for a given iteration using an exponential decay.
-            """
-            return decay_rate ** iteration
-
-        @jax.jit
-        def lagrange_weight_schedule_sigmoid(iteration, max_iter, slope=10):
-            """
-            Returns the Lagrange multiplier weight for a given iteration using a sigmoidal schedule.
-            """
-            weight = 1 - (1 / (1 + jnp.exp(-slope * (iteration - max_iter/2) / max_iter)))
-            return weight
-
-
-        if self.cfg.lagrange_weight_sch.decay and self.cfg.lagrange_weight_sch.sigmoid:
-            raise AssertionError ("Make sure only one weight schedule is selected")
-        elif self.cfg.lagrange_weight_sch.decay:
-            self.weight_schedule = lagrange_weight_schedule_decay
-        elif self.cfg.lagrange_weight_sch.sigmoid:
-            self.weight_schedule = lagrange_weight_schedule_sigmoid
-            self.sigmoid_slope = self.cfg.lagrange_weight_sch.sigmoid_params.slope
-        else:
-            self.weight_schedule = None
 
 
         @hk.without_apply_rng
@@ -147,7 +124,7 @@ class Workspace:
         @partial(jax.jit, static_argnums=[4,5])
         def update_pce(
             # params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
-            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
@@ -155,8 +132,9 @@ class Workspace:
             
             xi = xi_params
             
-            (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
+            (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(
+                lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
+                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M)
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
@@ -188,7 +166,7 @@ class Workspace:
 
         for step in range(self.training_steps):
             flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
-                flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, lambda_=self.lambda_,
+                flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, 
             )
 
             # Calculate the KL-div before updating designs
@@ -196,20 +174,17 @@ class Workspace:
             log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
             kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
-            # TODO: Make more robust bounding range for designs
-            if xi_params > jnp.array([10.]):
-                xi_params = jnp.array([10.])
-            elif xi_params < jnp.array([-10.]):
-                xi_params = jnp.array([-10.])
+            # Setting bounds on the designs
+            if jnp.any(xi_params > 10.):
+                xi_params = jnp.minimum(xi_params, 10.)
+            elif jnp.any(xi_params < -10.):
+                xi_params = jnp.maximum(xi_params, -10.)
 
             # Update d_sim vector
-            self.d_sim = jnp.concatenate((self.d, xi_params), axis=0)
-            
-            if self.weight_schedule:
-                if self.cfg.lagrange_weight_sch.decay:
-                    self.lambda_ = self.weight_schedule(step)
-                elif self.cfg.lagrange_weight_sch.sigmoid:
-                    self.lambda_ = self.weight_schedule(step, self.training_steps, slope=self.sigmoid_slope)
+            if jnp.size(self.d) == 0:
+                self.d_sim = xi_params
+            else:
+                self.d_sim = jnp.concatenate((self.d, xi_params), axis=0)
             
             run_time = time.time()-tic
 
@@ -220,7 +195,7 @@ class Workspace:
             self.xi_grads = xi_grads
             self.loss = loss
 
-            wandb.log({"loss": loss, "xi": xi_params, "xi_grads": xi_grads, "kl_divs": kl_div})
+            # wandb.log({"loss": loss, "xi": xi_params, "xi_grads": xi_grads, "kl_divs": kl_div})
 
             # writer.writerow({
             #     'step': step, 
@@ -264,7 +239,7 @@ class Workspace:
 
 from linear_regression import Workspace as W
 
-@hydra.main(version_base=None, config_path="..", config_name="config")
+@hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
     fname = os.getcwd() + '/latest.pt'
     if os.path.exists(fname):
@@ -282,4 +257,3 @@ def main(cfg):
 
 if __name__ == "__main__":
     main()
-
