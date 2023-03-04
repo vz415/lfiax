@@ -31,12 +31,13 @@ def conditioner_mlp(
                     x_temp = hk.nets.MLP([hidden], activate_final=True)(x)
                     if i > 0: 
                         x += x_temp
-                        # x = hk.BatchNorm()(x)
+                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
                     else: 
                         x = x_temp
-                        # x = hk.BatchNorm()(x)
+                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
             else:
                 x = hk.nets.MLP(hidden_sizes, activate_final=True)(x)
+                x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
             x = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
                 w_init=jnp.zeros,

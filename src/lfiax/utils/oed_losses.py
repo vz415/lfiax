@@ -15,8 +15,28 @@ Array = jnp.ndarray
 PRNGKey = Array
 
 
-# TODO: Make the `log_prob` function in its own file
-# TODO: refactor functions for non-local functions
+def _safe_mean_terms(terms):
+    # breakpoint()
+    mask = jnp.isnan(terms) | (terms == -jnp.inf) | (terms == jnp.inf)
+    nonnan = jnp.sum(~mask, axis=0, dtype=jnp.float32)
+    # terms = jnp.where(mask, 0.``, terms)
+    terms = jnp.where(mask, 0., terms)
+    jax.debug.print("terms: {}", terms)
+    jax.debug.print("mask: {}", mask)
+    # breakpoint()
+    # def assert_fn():
+    #     if jnp.any(mask):
+    #         raise AssertionError
+
+    # if jnp.any(mask): raise AssertionError
+    # print(jnp.any(mask))
+    # jax.debug.print("mask vals: {}", jnp.any(mask))
+    # jax.lax.select(jnp.any(mask), assert_fn, lambda: None)
+    # loss = jnp.sum(terms, axis=0) / nonnan
+    loss = terms / nonnan
+    agg_loss = jnp.sum(loss)
+    return agg_loss, loss
+
 
 @partial(jax.jit, static_argnums=[2,3])
 def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10, **kwargs):
@@ -83,9 +103,10 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     marginal_lp = compute_marginal_lp(
         keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp
         ) - jnp.log(M+1)
-
-    EIG = jnp.sum(conditional_lp - marginal_lp)
     
+    # EIG = jnp.sum(conditional_lp - marginal_lp)
+    EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
+
     return - EIG, (conditional_lp, theta_0, x_noiseless, noise)
 
 
