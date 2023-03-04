@@ -19,20 +19,7 @@ def _safe_mean_terms(terms):
     # breakpoint()
     mask = jnp.isnan(terms) | (terms == -jnp.inf) | (terms == jnp.inf)
     nonnan = jnp.sum(~mask, axis=0, dtype=jnp.float32)
-    # terms = jnp.where(mask, 0.``, terms)
     terms = jnp.where(mask, 0., terms)
-    jax.debug.print("terms: {}", terms)
-    jax.debug.print("mask: {}", mask)
-    # breakpoint()
-    # def assert_fn():
-    #     if jnp.any(mask):
-    #         raise AssertionError
-
-    # if jnp.any(mask): raise AssertionError
-    # print(jnp.any(mask))
-    # jax.debug.print("mask vals: {}", jnp.any(mask))
-    # jax.lax.select(jnp.any(mask), assert_fn, lambda: None)
-    # loss = jnp.sum(terms, axis=0) / nonnan
     loss = terms / nonnan
     agg_loss = jnp.sum(loss)
     return agg_loss, loss
