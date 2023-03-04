@@ -134,11 +134,7 @@ class Workspace:
             
             (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-<<<<<<< HEAD:linear_regression.py
                 flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M)
-=======
-                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M, lambda_=lambda_)
->>>>>>> ebb6456 (changes to linear regression simulator for multi-dim designs):examples/linear_regression.py
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)

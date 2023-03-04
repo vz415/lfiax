@@ -167,12 +167,10 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
 
     n_n = distrax.Independent(
         distrax.MultivariateNormalDiag(mu_noise, sigma_noise)
-    # ).sample(seed=keys[1], sample_shape=[len(d), len(priors)])
     ).sample(seed=keys[1], sample_shape=[len(priors), d.shape[-1]])
 
     # sample random gamma noise
     n_g = distrax.Gamma(2.0, 0.5).sample(
-        # seed=keys[2], sample_shape=[len(d), len(priors)]
         seed=keys[2], sample_shape=[len(priors), d.shape[-1]]
     )
 
@@ -188,7 +186,7 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     
     ygrads = priors[:, 1]
 
-    return y_noised, jnp.squeeze(priors), y, sigma
+    return y_noised, priors, y, sigma
 
 
 def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):

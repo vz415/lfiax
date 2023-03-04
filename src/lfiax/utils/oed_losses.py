@@ -54,7 +54,7 @@ def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10
 
 
 @partial(jax.jit, static_argnums=[3,5,6])
-def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10, lambda_: float=0.99):
+def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10,):
     """
     Calculates PCE loss using jax.lax.scan to accelerate.
 
@@ -75,8 +75,7 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     xi = jnp.broadcast_to(xi, (N, xi.shape[-1]))
 
     # simulate the outcomes before finding their log_probs
-    # BUG: What did I intend designs to be? I think it's supposed to be a concatenation between previous designs and xi
-    # breakpoint()
+    # BUG: Make `designs` more explicit
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
 
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
@@ -86,7 +85,7 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
         ) - jnp.log(M+1)
 
     EIG = jnp.sum(conditional_lp - marginal_lp)
-    # Need to return conditional_lp to check KL-div...
+    
     return - EIG, (conditional_lp, theta_0, x_noiseless, noise)
 
 
