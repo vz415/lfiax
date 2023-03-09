@@ -17,7 +17,7 @@ contrastive_sampling:
 designs:
   d: null
   # d_data_path: ${${designs.d} if ${designs.d} is not None else 'null'}
-  xi: [-5., -3., 0., 3., 5.]
+  xi: [-5., -2.5, 0., 2.5, 5.]
 
 param_shapes:
   theta_shape: 2
@@ -32,16 +32,10 @@ flow_params:
 optimization_params:
   learning_rate: 1e-3
   xi_learning_rate: 1e-1
+  xi_optimizer: "Stupid_Adam"
+  xi_scheduler: "None"
   training_steps: 10000
-  lambda_: 0.99
 
-lagrange_weight_sch:
-  use:
-  decay: True
-  sigmoid: False
-  # name: ${'decay' if lagrange_weight_sch.decay else 'sigmoid' if lagrange_weight_sch.sigmoid else 'None'}
-  sigmoid_params:
-    slope: 10.
 
 hydra:
   # run:
@@ -75,5 +69,7 @@ hydra:
       contrastive_sampling.M: [10, 50, 100]
       contrastive_sampling.N: [10, 50, 100]
       optimization_params.learning_rate: [1e-1, 1e-2, 1e-3, 1e-4]
-      optimization_params.xi_learning_rate: [1e-1, 1e-2, 1e-3, 1e-4]
+      optimization_params.xi_learning_rate: [5e-1, 1e-1, 1e-2]
+      optimization_params.xi_optimizer: ["Adam", "SGD", "Yogi", "AdaBelief"]
+      optimization_params.xi_scheduler: ["Linear", "Exponential"]
 

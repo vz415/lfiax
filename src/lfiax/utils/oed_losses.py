@@ -78,11 +78,14 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
         return jnp.log(result[0])
 
     keys = jrandom.split(prng_key, 1 + M)
-    xi = xi_params
-    xi = jnp.broadcast_to(xi, (N, xi.shape[-1]))
+    # xi = xi_params
+    # xi = jnp.broadcast_to(xi, (N, xi.shape[-1]))
+    # breakpoint()
+    xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
 
     # simulate the outcomes before finding their log_probs
     # BUG: Make `designs` more explicit
+    # breakpoint()
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
 
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)

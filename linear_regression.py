@@ -89,9 +89,11 @@ class Workspace:
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
-        self.xi_learning_rate = self.cfg.optimization_params.xi_learning_rate
+        self.xi_lr_init = self.cfg.optimization_params.xi_learning_rate
         self.training_steps = self.cfg.optimization_params.training_steps
-        self.lambda_ = self.cfg.optimization_params.lambda_
+        self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
+        self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
+        self.xi_lr_end = 1e-4
 
 
         @hk.without_apply_rng
@@ -121,20 +123,17 @@ class Workspace:
         # logf, writer = self._init_logging()
         tic = time.time()
 
-        @partial(jax.jit, static_argnums=[4,5])
+        @partial(jax.jit, static_argnums=[5,6])
         def update_pce(
-            # params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array, lambda_: float,
-            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, N: int, M: int, designs: Array,
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, opt_state_xi: OptState, N: int, M: int, designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
-            xi = xi_params
-            
             (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi, prng_key, log_prob_fun, designs, N=N, M=M)
+                flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M)
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
@@ -155,45 +154,71 @@ class Workspace:
 
         optimizer = optax.adam(self.learning_rate)
         opt_state = optimizer.init(params)
-        
-        # This could be initialized by a distribution of designs!
-        params['xi'] = self.xi
-        xi_params = params['xi']
-        optimizer2 = optax.adam(self.xi_learning_rate)
-        opt_state_xi = optimizer2.init(xi_params)
 
+        # This could be initialized by a distribution of designs!
+        if self.xi_scheduler == "None":
+            schedule = self.xi_lr_init
+        elif self.xi_scheduler == "Linear":
+            schedule = optax.linear_schedule(self.xi_lr_init, self.xi_lr_end, transition_steps)
+        elif self.xi_scheduler == "Exponential":
+            schedule = optax.exponential_decay(
+                init_value=self.xi_lr_init,
+                transition_steps=self.training_steps,
+                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / num_epochs),
+                staircase=False
+            )
+        else:
+            raise AssertionError("Specified unsupported scheduler.")
+
+        params['xi'] = self.xi
+
+        # Making its own unique haiku dicitonary for now but can change
+        xi_params = {key: value for key, value in params.items() if key == 'xi'}
+
+        if self.xi_optimizer == "Stupid_Adam":
+            optimizer2 = optax.adam(learning_rate=self.xi_lr_init)
+        elif self.xi_optimizer == "Adam":
+            optimizer2 = optax.adam(learning_rate=schedule)
+        elif self.xi_optimizer == "SGD":
+            optimizer2 = optax.sgd(learning_rate=schedule)
+        elif self.xi_optimizer == "Yogi":
+            optimizer2 = optax.yogi(learning_rate=schedule)
+        elif self.xi_optimizer == "AdaBelief":
+            optimizer2 = optax.adabelief(learning_rate=schedule)
+            
+        opt_state_xi = optimizer2.init(xi_params)
+        
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            flow_params, xi_params, opt_state, xi_opt_state, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
-                flow_params, xi_params, next(prng_seq), opt_state, N=self.N, M=self.M, designs=self.d_sim, 
-            )
-
+            if self.xi_optimizer == "Stupid_Adam":
+                flow_params, xi_params, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
+                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                )
+                xi_updates['xi'] = xi_updates['xi'] * (self.xi_lr_end ** (step / self.training_steps))
+            else:
+                flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
+                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                )
+            
             # Calculate the KL-div before updating designs
             # TODO: Make sure `MultivariateNormalDiag` is right distribution & implementation
             log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
             kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
             # Setting bounds on the designs
-            if jnp.any(xi_params > 10.):
-                xi_params = jnp.minimum(xi_params, 10.)
-            elif jnp.any(xi_params < -10.):
-                xi_params = jnp.maximum(xi_params, -10.)
+            xi_params['xi'] = jnp.clip(xi_params['xi'], a_min=-10., a_max=10.)
 
             # Update d_sim vector
             if jnp.size(self.d) == 0:
-                self.d_sim = xi_params
+                self.d_sim = xi_params['xi']
             else:
-                self.d_sim = jnp.concatenate((self.d, xi_params), axis=0)
+                self.d_sim = jnp.concatenate((self.d, xi_params['xi']), axis=0)
             
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {xi_params}; Xi Updates: {xi_updates}; Loss: {loss}; KL Div: {kl_div}; ")
-
-            self.xi = xi_params
-            self.xi_grads = xi_grads
-            self.loss = loss
+            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; KL Div: {kl_div}; ")
 
             # wandb.log({"loss": loss, "xi": xi_params, "xi_grads": xi_grads, "kl_divs": kl_div})
 
