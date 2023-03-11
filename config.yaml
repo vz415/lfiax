@@ -8,7 +8,7 @@ seed: 0
 
 wandb:
   entity: vz_uci
-  project: lfiax_1d_newOpt_sweep
+  project: lfiax_5d_stupidAdam_designRegularize
 
 contrastive_sampling:
   M: 50

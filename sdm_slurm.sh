@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1                       ## number of processes to launch for each array iteration
 #SBATCH --cpus-per-task=1                ## number of cores the job needs
 #SBATCH --time=10:00:00                   ## time limit for each array task
-#SBATCH --array=1-5                      ## number of array tasks
+#SBATCH --array=1-25                      ## number of array tasks
 #SBATCH --mail-type=fail,end
 #SBATCH --mail-user=vzaballa@uci.edu
                                 ## $SLURM_ARRAY_TASK_ID takes values from 1 to 100 inclusive
@@ -23,7 +23,7 @@ export LD_LIBRARY_PATH=/data/homezvol1/vzaballa/.conda/envs/lfiax/lib/
 
 ## Run the script
 # python examples/linear_regression.py -m # ++seed=$SLURM_ARRAY_TASK_ID ++contrastive_sampling.M=10,11
-python examples/linear_regression.py ++seed=$SLURM_ARRAY_TASK_ID ++contrastive_sampling.M=10,11
+python linear_regression.py ++seed=$SLURM_ARRAY_TASK_ID
 
 #python sbiDOEMAN/main_bma.py ++seed=$SLURM_ARRAY_TASK_ID ++num_design_rounds=5 ++BMP.model='onestep'
 #python sbiDOEMAN/main_random.py ++seed=$SLURM_ARRAY_TASK_ID ++SDM.random=True ++num_design_rounds=5 ++BMP.model="onestep"
