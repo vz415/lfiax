@@ -11,13 +11,13 @@ wandb:
   project: lfiax_1d_newOpt_sweep
 
 contrastive_sampling:
-  M: 10
+  M: 50
   N: 10
 
 designs:
   d: null
   # d_data_path: ${${designs.d} if ${designs.d} is not None else 'null'}
-  xi: 0. # [-5., -2.5, 0., 2.5, 5.]
+  xi: [-5., -2.5, 0., 2.5, 5.]
 
 param_shapes:
   theta_shape: 2
@@ -34,7 +34,7 @@ optimization_params:
   xi_learning_rate: 1e-1
   xi_optimizer: "Stupid_Adam"
   xi_scheduler: "None"
-  training_steps: 10000
+  training_steps: 1000
 
 
 hydra:

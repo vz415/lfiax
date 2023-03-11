@@ -45,15 +45,15 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -131,7 +131,7 @@ class Workspace:
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
-            (loss, (conditional_lp, theta_0, x_noiseless, noise)), grads = jax.value_and_grad(
+            (loss, (conditional_lp, theta_0, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
                 flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M)
             
@@ -141,7 +141,7 @@ class Workspace:
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
 
-            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise #updates['xi']
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG
         
          # Initialize the params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -170,9 +170,8 @@ class Workspace:
         else:
             raise AssertionError("Specified unsupported scheduler.")
 
+        # Making xi its own unique haiku dicitonary for now but can change
         params['xi'] = self.xi
-
-        # Making its own unique haiku dicitonary for now but can change
         xi_params = {key: value for key, value in params.items() if key == 'xi'}
 
         if self.xi_optimizer == "Stupid_Adam":
@@ -192,12 +191,13 @@ class Workspace:
 
         for step in range(self.training_steps):
             if self.xi_optimizer == "Stupid_Adam":
-                flow_params, xi_params, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
+                flow_params, xi_params, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
                     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
                 )
+                # This shouldn't work, but, somehow, it does
                 xi_updates['xi'] = xi_updates['xi'] * (self.xi_lr_end ** (step / self.training_steps))
             else:
-                flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise = update_pce(
+                flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
                     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
                 )
             
@@ -218,9 +218,9 @@ class Workspace:
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; KL Div: {kl_div}; ")
+            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div})
 
             # writer.writerow({
             #     'step': step, 

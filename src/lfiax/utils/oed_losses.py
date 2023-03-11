@@ -15,8 +15,43 @@ Array = jnp.ndarray
 PRNGKey = Array
 
 
+@jax.jit
+def pairwise_distances(points):
+    """
+    Calculates the pairwise distances between a set of points.
+    
+    Args:
+        points: an array of shape (n_points, n_dims) containing the coordinates of the points
+        
+    Returns:
+        dists: an array of shape (n_points, n_points) containing the pairwise distances between the points
+    """
+    n_dims, n_points = points.shape
+    tiled_points = jnp.tile(points, (1, n_points, 1))
+    transposed_points = jnp.transpose(tiled_points, axes=(0, 2, 1))
+    diffs = tiled_points - transposed_points
+    return diffs
+
+
+@jax.jit
+def measure_of_spread(points):
+    """
+    Calculates a measure of spread for a set of points.
+
+    Args:
+        points: an array of shape (n_points, n_dims) containing the coordinates of the points
+
+    Returns:
+        spread: a scalar value indicating the spread of the points
+    """
+    dists = jnp.abs(jnp.subtract(points, points.T))
+    cov = jnp.cov(dists) #, rowvar=False)
+    eigvals = jnp.linalg.eigvalsh(cov)
+    spread = jnp.sum(jnp.sqrt(jnp.maximum(eigvals, 0.)))
+    return spread
+
+
 def _safe_mean_terms(terms):
-    # breakpoint()
     mask = jnp.isnan(terms) | (terms == -jnp.inf) | (terms == jnp.inf)
     nonnan = jnp.sum(~mask, axis=0, dtype=jnp.float32)
     terms = jnp.where(mask, 0., terms)
@@ -80,12 +115,10 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     keys = jrandom.split(prng_key, 1 + M)
     # xi = xi_params
     # xi = jnp.broadcast_to(xi, (N, xi.shape[-1]))
-    # breakpoint()
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
 
     # simulate the outcomes before finding their log_probs
     # BUG: Make `designs` more explicit
-    # breakpoint()
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
 
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
@@ -97,7 +130,15 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
 
-    return - EIG, (conditional_lp, theta_0, x_noiseless, noise)
+    # Calculte design penalty
+    # design_spread = measure_of_spread(xi_params['xi'])
+    # jax.debug.print("design_spread: {}", design_spread)
+
+    # loss = 0.001 * design_spread + EIG
+    loss = 0.01 * jnp.mean(jnp.abs(pairwise_distances(xi_params['xi']))) + EIG
+    # loss = 0.01 * jnp.mean(jnp.sqrt(pairwise_distances(xi_params['xi'])**2)) + EIG
+
+    return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)
 
 
 @partial(jax.jit, static_argnums=[2,3])

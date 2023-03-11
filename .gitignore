@@ -152,3 +152,9 @@ dmypy.json
 
 # wandb
 *wandb/
+
+# logs
+*logs/
+
+# errors
+*errors/
