@@ -113,8 +113,6 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
         return jnp.log(result[0])
 
     keys = jrandom.split(prng_key, 1 + M)
-    # xi = xi_params
-    # xi = jnp.broadcast_to(xi, (N, xi.shape[-1]))
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
 
     # simulate the outcomes before finding their log_probs
@@ -132,10 +130,11 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
 
     # Calculte design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
+    design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
     # jax.debug.print("design_spread: {}", design_spread)
 
+    loss = EIG
     # loss = 0.001 * design_spread + EIG
-    loss = 0.01 * jnp.mean(jnp.abs(pairwise_distances(xi_params['xi']))) + EIG
     # loss = 0.01 * jnp.mean(jnp.sqrt(pairwise_distances(xi_params['xi'])**2)) + EIG
 
     return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)

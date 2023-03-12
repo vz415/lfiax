@@ -45,15 +45,15 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -220,7 +220,7 @@ class Workspace:
             # Saving contents to file
             print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
 
             # writer.writerow({
             #     'step': step, 
