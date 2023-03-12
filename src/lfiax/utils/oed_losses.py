@@ -133,8 +133,8 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
     # jax.debug.print("design_spread: {}", design_spread)
 
-    loss = EIG
-    # loss = 0.001 * design_spread + EIG
+    # loss = EIG
+    loss = 0.001 * design_spread + EIG
     # loss = 0.01 * jnp.mean(jnp.sqrt(pairwise_distances(xi_params['xi'])**2)) + EIG
 
     return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)
