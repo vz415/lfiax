@@ -45,29 +45,30 @@ OptState = Any
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
         self.seed = self.cfg.seed
-
-        if not self.cfg.designs.d:
+        
+        if self.cfg.designs.d is None:
             self.d = jnp.array([])
             self.xi = jnp.array([self.cfg.designs.xi])
             self.d_sim = self.xi # jnp.array([self.cfg.designs.xi])
         else:
-            self.d = jnp.array(self.cfg.designs.d)
+            # Should these have another dimension to make later processing easier?
+            self.d = jnp.array([self.cfg.designs.d])
             self.xi = jnp.array([self.cfg.designs.xi])
-            self.d_sim = jnp.concatenate((self.d, self.xi), axis=0)
+            self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
 
         # Bunch of event shapes needed for various functions
         # len_xi = len(self.xi)
@@ -123,9 +124,11 @@ class Workspace:
         # logf, writer = self._init_logging()
         tic = time.time()
 
-        @partial(jax.jit, static_argnums=[5,6])
+        @partial(jax.jit, static_argnums=[5,6,7])
         def update_pce(
-            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, opt_state: OptState, opt_state_xi: OptState, N: int, M: int, designs: Array,
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
+            opt_state: OptState, opt_state_xi: OptState, N: int, M: int, \
+            scale_factor: int, designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
@@ -133,7 +136,7 @@ class Workspace:
             
             (loss, (conditional_lp, theta_0, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M)
+                flow_params, xi_params, prng_key, log_prob_fun, designs, scale_factor, N=N, M=M)
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
@@ -185,8 +188,16 @@ class Workspace:
         elif self.xi_optimizer == "AdaBelief":
             optimizer2 = optax.adabelief(learning_rate=schedule)
             
-        opt_state_xi = optimizer2.init(xi_params)
-        
+        # Normalize xi values for optimizer
+        design_min = -10.
+        design_max = 10.
+        scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
+        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / jnp.std(xi_params['xi'])
+        xi_params_max_norm = jnp.divide(xi_params['xi'], scale_factor)
+
+        # TODO: swap in scaled xi params to optimization routine.
+        # opt_state_xi = optimizer2.init(xi_params)
+        opt_state_xi = optimizer2.init(xi_params_max_norm)
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
@@ -194,12 +205,20 @@ class Workspace:
                 flow_params, xi_params, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
                     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
                 )
-                # This shouldn't work, but, somehow, it does
+                # This shouldn't work, but, somehow, it does (jk it doesn't)
+                print(f"opt_state_xi: {opt_state_xi}")
+                # breakpoint()
                 xi_updates['xi'] = xi_updates['xi'] * (self.xi_lr_end ** (step / self.training_steps))
             else:
+                # flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
+                #     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                # )
                 flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
                 )
+                # print(f"opt_state: {opt_state}")
+                print(f"opt_state_xi: {opt_state_xi}")
+                # breakpoint()
             
             # Calculate the KL-div before updating designs
             # TODO: Make sure `MultivariateNormalDiag` is right distribution & implementation
@@ -207,20 +226,22 @@ class Workspace:
             kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
             # Setting bounds on the designs
-            xi_params['xi'] = jnp.clip(xi_params['xi'], a_min=-10., a_max=10.)
+            xi_params_max_norm['xi'] = jnp.clip(xi_params['xi'], a_min=design_min/scale_factor, a_max=design_max/scale_factor)
+            # Unnormalize to use for simulator params
+            xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
 
             # Update d_sim vector
             if jnp.size(self.d) == 0:
                 self.d_sim = xi_params['xi']
             else:
-                self.d_sim = jnp.concatenate((self.d, xi_params['xi']), axis=0)
+                self.d_sim = jnp.concatenate((self.d, xi_params['xi']), axis=1)
             
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
+            print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
 
             # writer.writerow({
             #     'step': step, 

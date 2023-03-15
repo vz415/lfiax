@@ -95,13 +95,10 @@ def lfi_pce_eig_fori(params: hk.Params, prng_key: PRNGKey, N: int=100, M: int=10
     return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
 
 
-@partial(jax.jit, static_argnums=[3,5,6])
-def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, N: int=100, M: int=10,):
+@partial(jax.jit, static_argnums=[3,5,6,7])
+def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, log_prob_fun: Callable, designs: Array, scale_factor: float, N: int=100, M: int=10,):
     """
     Calculates PCE loss using jax.lax.scan to accelerate.
-
-    Modified with a lagrangian loss term that shifts from focusing on training the flow
-    to optimizing the design.
     """
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
@@ -116,9 +113,14 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
 
     # simulate the outcomes before finding their log_probs
-    # BUG: Make `designs` more explicit
+    # BUG: Make `designs` more explicit - oh duh! designs is the mix of the previous and 
+    # proposed design points. So designs are combos of previous designs and proposed designs
+    # 
+    # breakpoint()
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
-
+    
+    # Normalize xi values
+    xi = xi / scale_factor
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
@@ -130,11 +132,12 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
 
     # Calculte design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
-    design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
+    # BUG: Check how this works for scalar values
+    # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
     # jax.debug.print("design_spread: {}", design_spread)
 
-    # loss = EIG
-    loss = 0.001 * design_spread + EIG
+    loss = EIG
+    # loss = 0.001 * design_spread + EIG
     # loss = 0.01 * jnp.mean(jnp.sqrt(pairwise_distances(xi_params['xi'])**2)) + EIG
 
     return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)

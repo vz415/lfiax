@@ -15,9 +15,9 @@ contrastive_sampling:
   N: 10
 
 designs:
-  d: null
+  d: [-5., -2.5, 0., 2.5, 5.] # [0.] # 0. # null
   # d_data_path: ${${designs.d} if ${designs.d} is not None else 'null'}
-  xi: [-5., -2.5, 0., 2.5, 5.]
+  xi: [-5., -2.5, 0., 2.5, 5.] # [0.] # 
 
 param_shapes:
   theta_shape: 2
@@ -32,7 +32,7 @@ flow_params:
 optimization_params:
   learning_rate: 1e-3
   xi_learning_rate: 1e-1
-  xi_optimizer: "Stupid_Adam"
+  xi_optimizer: "Adam"
   xi_scheduler: "None"
   training_steps: 1000
 
