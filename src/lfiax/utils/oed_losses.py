@@ -113,14 +113,9 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
 
     # simulate the outcomes before finding their log_probs
-    # BUG: Make `designs` more explicit - oh duh! designs is the mix of the previous and 
-    # proposed design points. So designs are combos of previous designs and proposed designs
-    # 
-    # breakpoint()
+    # `designs` are combos of previous designs and proposed (non-scaled) designs
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
     
-    # Normalize xi values
-    xi = xi / scale_factor
     conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
@@ -130,7 +125,7 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
 
-    # Calculte design penalty
+    # Calculate design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
     # BUG: Check how this works for scalar values
     # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
@@ -138,7 +133,6 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
 
     loss = EIG
     # loss = 0.001 * design_spread + EIG
-    # loss = 0.01 * jnp.mean(jnp.sqrt(pairwise_distances(xi_params['xi'])**2)) + EIG
 
     return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)
 

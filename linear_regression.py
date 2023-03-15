@@ -121,7 +121,6 @@ class Workspace:
 
 
     def run(self) -> Callable:
-        # logf, writer = self._init_logging()
         tic = time.time()
 
         @partial(jax.jit, static_argnums=[5,6,7])
@@ -146,7 +145,7 @@ class Workspace:
 
             return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG
         
-         # Initialize the params
+         # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
         params = self.log_prob.init(
             next(prng_seq),
@@ -158,7 +157,6 @@ class Workspace:
         optimizer = optax.adam(self.learning_rate)
         opt_state = optimizer.init(params)
 
-        # This could be initialized by a distribution of designs!
         if self.xi_scheduler == "None":
             schedule = self.xi_lr_init
         elif self.xi_scheduler == "Linear":
@@ -173,10 +171,6 @@ class Workspace:
         else:
             raise AssertionError("Specified unsupported scheduler.")
 
-        # Making xi its own unique haiku dicitonary for now but can change
-        params['xi'] = self.xi
-        xi_params = {key: value for key, value in params.items() if key == 'xi'}
-
         if self.xi_optimizer == "Stupid_Adam":
             optimizer2 = optax.adam(learning_rate=self.xi_lr_init)
         elif self.xi_optimizer == "Adam":
@@ -187,13 +181,19 @@ class Workspace:
             optimizer2 = optax.yogi(learning_rate=schedule)
         elif self.xi_optimizer == "AdaBelief":
             optimizer2 = optax.adabelief(learning_rate=schedule)
-            
+        
+        # This could be initialized by a distribution of designs!
+        # Making xi its own unique haiku dicitonary for now but can change
+        params['xi'] = self.xi
+        xi_params = {key: value for key, value in params.items() if key == 'xi'}
+        
         # Normalize xi values for optimizer
         design_min = -10.
         design_max = 10.
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
         # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / jnp.std(xi_params['xi'])
-        xi_params_max_norm = jnp.divide(xi_params['xi'], scale_factor)
+        xi_params_max_norm = {}
+        xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
 
         # TODO: swap in scaled xi params to optimization routine.
         # opt_state_xi = optimizer2.init(xi_params)
@@ -202,23 +202,20 @@ class Workspace:
 
         for step in range(self.training_steps):
             if self.xi_optimizer == "Stupid_Adam":
-                flow_params, xi_params, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                flow_params, xi_params_max_norm, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
+                    flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
                 )
                 # This shouldn't work, but, somehow, it does (jk it doesn't)
                 print(f"opt_state_xi: {opt_state_xi}")
-                # breakpoint()
                 xi_updates['xi'] = xi_updates['xi'] * (self.xi_lr_end ** (step / self.training_steps))
             else:
                 # flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
                 #     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
                 # )
-                flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                    flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
+                flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
+                    flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
                 )
-                # print(f"opt_state: {opt_state}")
                 print(f"opt_state_xi: {opt_state_xi}")
-                # breakpoint()
             
             # Calculate the KL-div before updating designs
             # TODO: Make sure `MultivariateNormalDiag` is right distribution & implementation
@@ -226,7 +223,13 @@ class Workspace:
             kl_div = abs(jnp.sum(log_probs - conditional_lp))
             
             # Setting bounds on the designs
-            xi_params_max_norm['xi'] = jnp.clip(xi_params['xi'], a_min=design_min/scale_factor, a_max=design_max/scale_factor)
+            # xi_params_max_norm['xi'] = jnp.clip(xi_params['xi'], a_min=-10., a_max=10.)
+            # TODO: Fix this error.
+            xi_params_max_norm['xi'] = jnp.clip(
+                xi_params_max_norm['xi'], 
+                a_min=jnp.divide(design_min, scale_factor), 
+                a_max=jnp.divide(design_max, scale_factor)
+                )
             # Unnormalize to use for simulator params
             xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
 
@@ -242,45 +245,6 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
 
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
-
-            # writer.writerow({
-            #     'step': step, 
-            #     'xi': float(self.xi),
-            #     'xi_grads': float(self.xi_grads),
-            #     'loss': float(self.loss),
-            #     'kl_div': float(kl_div),
-            #     'time':float(run_time)
-            # })
-            # logf.flush()
-            # self.save('latest')
-
-
-    def save(self, tag='latest'):
-        pass
-        path = HydraConfig.get().runtime.output_dir
-        # Creating a dictionary from the values since there is pickling error
-        # when trying to pickle the entire object
-        save_dict = {
-            "xi": self.xi,
-            "xi_grads": self.xi_grads,
-            "loss": self.loss,
-        }
-        with open(path, 'wb') as f:
-            pkl.dump(save_dict, f)
-
-    def _init_logging(self):
-        '''
-        This function writes a csv to the working directory.
-        '''
-        pass
-        path = os.path.join(HydraConfig.get().runtime.output_dir, 'log.csv')
-        logf = open(path, 'a') 
-        fieldnames = ['step', 'xi', 'xi_grads', 'loss', 'time']
-        writer = csv.DictWriter(logf, fieldnames=fieldnames)
-        if os.stat(path).st_size == 0:
-            writer.writeheader()
-            logf.flush()
-        return logf, writer
 
 
 from linear_regression import Workspace as W
