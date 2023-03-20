@@ -128,13 +128,16 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     # Calculate design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
     # BUG: Check how this works for scalar values
-    # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
+    design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
     # jax.debug.print("design_spread: {}", design_spread)
 
-    loss = EIG
-    # loss = 0.001 * design_spread + EIG
+    # Various loss functions tested
+    # loss = EIG
+    # loss = 0.01 * design_spread + EIG
+    # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
+    loss = EIG + jnp.mean(conditional_lp)
 
-    return -loss , (conditional_lp, theta_0, x_noiseless, noise, EIG)
+    return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG)
 
 
 @partial(jax.jit, static_argnums=[2,3])

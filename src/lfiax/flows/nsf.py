@@ -80,6 +80,8 @@ def make_nsf(
             event_shape,
             hidden_sizes,
             num_bijector_params,
+            # shift,
+            # scale,
             standardize_theta,
             use_resnet,
         )
@@ -111,6 +113,6 @@ def make_nsf(
             reinterpreted_batch_ndims=len(event_shape),
         )
     else:
-        raise AssertionError("Specified non-implemented distribution.")
+        raise AssertionError("Specified non-implemented base distribution.")
 
     return ConditionalTransformed(base_distribution, flow)

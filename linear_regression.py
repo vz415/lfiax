@@ -65,13 +65,11 @@ class Workspace:
             self.xi = jnp.array([self.cfg.designs.xi])
             self.d_sim = self.xi # jnp.array([self.cfg.designs.xi])
         else:
-            # Should these have another dimension to make later processing easier?
             self.d = jnp.array([self.cfg.designs.d])
             self.xi = jnp.array([self.cfg.designs.xi])
             self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
 
         # Bunch of event shapes needed for various functions
-        # len_xi = len(self.xi)
         len_xi = self.xi.shape[-1]
         self.xi_shape = (len_xi,)
         self.theta_shape = (2,)
@@ -97,6 +95,7 @@ class Workspace:
         self.xi_lr_end = 1e-4
 
 
+        # @hk.transform_with_state
         @hk.without_apply_rng
         @hk.transform
         def log_prob(data: Array, theta: Array, xi: Array) -> Array:
@@ -109,7 +108,7 @@ class Workspace:
                 hidden_sizes=[hidden_size] * mlp_num_layers,
                 num_bins=num_bins,
                 standardize_x=True,
-                standardize_theta=False,
+                standardize_theta=True,
                 use_resnet=True,
                 event_dim=EVENT_DIM,
                 shift=shift,
@@ -130,20 +129,22 @@ class Workspace:
             scale_factor: int, designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
+            # jax.debug.breakpoint()
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
-            (loss, (conditional_lp, theta_0, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
+            (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, log_prob_fun, designs, scale_factor, N=N, M=M)
-            
+                flow_params, xi_params, prng_key, log_prob_fun, designs, scale_factor, N=N, M=M
+                )
+            # jax.debug.breakpoint()
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
 
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
 
-            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[0], grads[1], xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG
         
          # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -184,6 +185,8 @@ class Workspace:
         
         # This could be initialized by a distribution of designs!
         # Making xi its own unique haiku dicitonary for now but can change
+        # breakpoint()
+        # params['xi'] = self.xi
         params['xi'] = self.xi
         xi_params = {key: value for key, value in params.items() if key == 'xi'}
         
@@ -191,9 +194,9 @@ class Workspace:
         design_min = -10.
         design_max = 10.
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
-        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / jnp.std(xi_params['xi'])
         xi_params_max_norm = {}
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
+        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / jnp.std(xi_params['xi'])
 
         # TODO: swap in scaled xi params to optimization routine.
         # opt_state_xi = optimizer2.init(xi_params)
@@ -201,35 +204,31 @@ class Workspace:
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            if self.xi_optimizer == "Stupid_Adam":
-                flow_params, xi_params_max_norm, opt_state, _, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                    flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
-                )
-                # This shouldn't work, but, somehow, it does (jk it doesn't)
-                print(f"opt_state_xi: {opt_state_xi}")
-                xi_updates['xi'] = xi_updates['xi'] * (self.xi_lr_end ** (step / self.training_steps))
-            else:
-                # flow_params, xi_params, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                #     flow_params, xi_params, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
-                # )
-                flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x_noiseless, noise, EIG = update_pce(
-                    flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
-                )
-                print(f"opt_state_xi: {opt_state_xi}")
+            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, flow_grads, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG = update_pce(
+                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
+            )
+            
+            # Calculate norm of grads as a metric
+            flow_grad_norm = jnp.sum(jnp.stack([jnp.linalg.norm(grad) for param_dict in flow_grads.values() for grad in param_dict.values()]))
+            xi_grad_norm = jnp.linalg.norm(xi_grads['xi'])
+            print(f"Flow Grad Norm: {flow_grad_norm}; Xi Grad Norm: {xi_grad_norm}")
+
+            if jnp.any(jnp.isnan(xi_grads['xi'])):
+                print("Gradients contain NaNs. Breaking out of loop.")
+                breakpoint()
+                break
             
             # Calculate the KL-div before updating designs
-            # TODO: Make sure `MultivariateNormalDiag` is right distribution & implementation
-            log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x_noiseless)
-            kl_div = abs(jnp.sum(log_probs - conditional_lp))
+            log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
+            kl_div = jnp.mean(log_probs - conditional_lp)
             
             # Setting bounds on the designs
-            # xi_params_max_norm['xi'] = jnp.clip(xi_params['xi'], a_min=-10., a_max=10.)
-            # TODO: Fix this error.
             xi_params_max_norm['xi'] = jnp.clip(
                 xi_params_max_norm['xi'], 
                 a_min=jnp.divide(design_min, scale_factor), 
                 a_max=jnp.divide(design_max, scale_factor)
                 )
+            
             # Unnormalize to use for simulator params
             xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
 
@@ -242,7 +241,8 @@ class Workspace:
             run_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; ")
+            print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
+            Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
 

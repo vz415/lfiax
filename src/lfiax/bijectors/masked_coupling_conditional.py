@@ -23,15 +23,15 @@ class MaskedConditionalCoupling(MaskedCoupling):
     conditioner), and `m` be a boolean mask interpreted numerically, such that
     True is 1 and False is 0. The masked coupling bijector is defined as follows:
 
-    - Forward: `y = (1-m) * f(x; g(m*x|z)) + m*x`
+    - Forward: `y = (1-m) * f(x; g(m*x,z)) + m*x`
 
     - Forward Jacobian log determinant:
-      `log|det J(x)| = sum((1-m) * log|df/dx(x; g(m*x|z))|)`
+      `log|det J(x)| = sum((1-m) * log|df/dx(x; g(m*x,z))|)`
 
-    - Inverse: `x = (1-m) * f^{-1}(y; g(m*y|z)) + m*y`
+    - Inverse: `x = (1-m) * f^{-1}(y; g(m*y,z)) + m*y`
 
     - Inverse Jacobian log determinant:
-      `log|det J(y)| = sum((1-m) * log|df^{-1}/dy(y; g(m*y|z))|)`
+      `log|det J(y)| = sum((1-m) * log|df^{-1}/dy(y; g(m*y,z))|)`
     """
 
     def __init__(self, **kwargs):
@@ -43,6 +43,10 @@ class MaskedConditionalCoupling(MaskedCoupling):
         """Computes y = f(x|z) and log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
         masked_x = jnp.where(self._event_mask, x, 0.0)
+        # breakpoint()
+        # testy = jnp.divide(jnp.subtract(masked_x, jnp.expand_dims(jnp.mean(masked_x, axis=1), axis=1)), jnp.expand_dims(jnp.std(masked_x, axis=1), axis=1))
+        # testy = jnp.divide(jnp.subtract(masked_x, jnp.expand_dims(jnp.mean(masked_x, axis=1), axis=0)), jnp.expand_dims(jnp.std(masked_x, axis=1), axis=0))
+        # jax.debug.breakpoint()
         # TODO: Better logic to detect when scalar x
         params = self._conditioner(masked_x, theta, xi)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
