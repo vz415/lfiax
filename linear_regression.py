@@ -99,8 +99,6 @@ class Workspace:
         @hk.without_apply_rng
         @hk.transform
         def log_prob(data: Array, theta: Array, xi: Array) -> Array:
-            shift = data.mean(axis=0)
-            scale = data.std(axis=0) + 1e-14
             # TODO: Pass more nsf parameters from config.yaml
             model = make_nsf(
                 event_shape=self.EVENT_SHAPE,
@@ -111,8 +109,6 @@ class Workspace:
                 standardize_theta=True,
                 use_resnet=True,
                 event_dim=EVENT_DIM,
-                shift=shift,
-                scale=scale,
             )
             return model.log_prob(data, theta, xi)
 
@@ -129,7 +125,6 @@ class Workspace:
             scale_factor: int, designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
-            # jax.debug.breakpoint()
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
@@ -137,7 +132,7 @@ class Workspace:
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
                 flow_params, xi_params, prng_key, log_prob_fun, designs, scale_factor, N=N, M=M
                 )
-            # jax.debug.breakpoint()
+            
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
 
@@ -166,15 +161,13 @@ class Workspace:
             schedule = optax.exponential_decay(
                 init_value=self.xi_lr_init,
                 transition_steps=self.training_steps,
-                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / num_epochs),
+                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / self.training_steps),
                 staircase=False
             )
         else:
             raise AssertionError("Specified unsupported scheduler.")
 
-        if self.xi_optimizer == "Stupid_Adam":
-            optimizer2 = optax.adam(learning_rate=self.xi_lr_init)
-        elif self.xi_optimizer == "Adam":
+        if self.xi_optimizer == "Adam":
             optimizer2 = optax.adam(learning_rate=schedule)
         elif self.xi_optimizer == "SGD":
             optimizer2 = optax.sgd(learning_rate=schedule)
@@ -184,9 +177,6 @@ class Workspace:
             optimizer2 = optax.adabelief(learning_rate=schedule)
         
         # This could be initialized by a distribution of designs!
-        # Making xi its own unique haiku dicitonary for now but can change
-        # breakpoint()
-        # params['xi'] = self.xi
         params['xi'] = self.xi
         xi_params = {key: value for key, value in params.items() if key == 'xi'}
         
@@ -196,10 +186,9 @@ class Workspace:
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
         xi_params_max_norm = {}
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
-        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / jnp.std(xi_params['xi'])
+        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / (jnp.std(xi_params['xi']) + 1e-10)
 
         # TODO: swap in scaled xi params to optimization routine.
-        # opt_state_xi = optimizer2.init(xi_params)
         opt_state_xi = optimizer2.init(xi_params_max_norm)
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
@@ -208,14 +197,8 @@ class Workspace:
                 flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
             )
             
-            # Calculate norm of grads as a metric
-            flow_grad_norm = jnp.sum(jnp.stack([jnp.linalg.norm(grad) for param_dict in flow_grads.values() for grad in param_dict.values()]))
-            xi_grad_norm = jnp.linalg.norm(xi_grads['xi'])
-            print(f"Flow Grad Norm: {flow_grad_norm}; Xi Grad Norm: {xi_grad_norm}")
-
             if jnp.any(jnp.isnan(xi_grads['xi'])):
                 print("Gradients contain NaNs. Breaking out of loop.")
-                breakpoint()
                 break
             
             # Calculate the KL-div before updating designs
@@ -232,7 +215,7 @@ class Workspace:
             # Unnormalize to use for simulator params
             xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
 
-            # Update d_sim vector
+            # Update d_sim vector for new simulations
             if jnp.size(self.d) == 0:
                 self.d_sim = xi_params['xi']
             else:

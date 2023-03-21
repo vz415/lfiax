@@ -32,8 +32,6 @@ def make_nsf(
     standardize_theta: bool = False,
     use_resnet: bool = True,
     event_dim: int = None,
-    shift: float = None,
-    scale: float = None,
     base_dist: str = "gaussian",
 ) -> distrax.Transformed:
     """Creates a neural spline flow (nsf) model using conditional
@@ -56,17 +54,6 @@ def make_nsf(
     # for a total of `3 * num_bins + 1` parameters.
     num_bijector_params = 3 * num_bins + 1
 
-    # Starting with an inverted standardizing layer - could put non-inverted
-    # standardizing layer at end of `layers` list
-    if standardize_x:
-        layers = [
-            ConditionalInverse(
-                ConditionalBlock(StandardizingBijector(shift, scale), event_dim)
-            )
-        ]
-    else:
-        layers = []
-
     if event_shape == (1,):
         conditioner = scalar_conditioner_mlp(
             event_shape,
@@ -80,11 +67,11 @@ def make_nsf(
             event_shape,
             hidden_sizes,
             num_bijector_params,
-            # shift,
-            # scale,
             standardize_theta,
             use_resnet,
         )
+    
+    layers = []
 
     # Append subsequent layers
     for _ in range(num_layers):

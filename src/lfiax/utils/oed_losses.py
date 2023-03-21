@@ -116,10 +116,15 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     # `designs` are combos of previous designs and proposed (non-scaled) designs
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
     
-    conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
+    scaled_x = jnp.divide(
+        jnp.subtract(x, jnp.expand_dims(jnp.mean(x, axis=0), axis=0)), 
+        jnp.expand_dims(jnp.std(x, axis=0), axis=0)
+        )
+    
+    conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
-        keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp
+        keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
         ) - jnp.log(M+1)
     
     # EIG = jnp.sum(conditional_lp - marginal_lp)
@@ -128,8 +133,7 @@ def lfi_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRN
     # Calculate design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
     # BUG: Check how this works for scalar values
-    design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
-    # jax.debug.print("design_spread: {}", design_spread)
+    # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
 
     # Various loss functions tested
     # loss = EIG

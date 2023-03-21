@@ -28,6 +28,7 @@ class StandardizingBijector(ScalarAffine):
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, x.shape)
         batched_scale = jnp.broadcast_to(self._scale, batch_shape)
         batched_shift = jnp.broadcast_to(self._shift, batch_shape)
+        # jax.debug.breakpoint()
         return batched_scale * x + batched_shift
 
     def forward_log_det_jacobian(
@@ -35,12 +36,14 @@ class StandardizingBijector(ScalarAffine):
     ) -> Array:
         """Computes log|det J(f)(x)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, x.shape)
+        # jax.debug.breakpoint()
         return jnp.broadcast_to(self._log_scale, batch_shape)
 
     def forward_and_log_det(
         self, x: Array, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
         """Computes y = f(x) and log|det J(f)(x)| ignoring z."""
+        # jax.debug.breakpoint()
         return self.forward(x, theta, xi), self.forward_log_det_jacobian(
             x, theta, xi
         )
@@ -50,6 +53,7 @@ class StandardizingBijector(ScalarAffine):
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, y.shape)
         batched_inv_scale = jnp.broadcast_to(self._inv_scale, batch_shape)
         batched_shift = jnp.broadcast_to(self._shift, batch_shape)
+        # jax.debug.breakpoint()
         return batched_inv_scale * (y - batched_shift)
 
     def inverse_log_det_jacobian(
@@ -57,12 +61,14 @@ class StandardizingBijector(ScalarAffine):
     ) -> Array:
         """Computes log|det J(f^{-1})(y)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, y.shape)
+        # jax.debug.breakpoint()
         return jnp.broadcast_to(jnp.negative(self._log_scale), batch_shape)
 
     def inverse_and_log_det(
         self, y: Array, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y) and log|det J(f^{-1})(y)| ignoring z."""
+        # jax.debug.breakpoint()
         return self.inverse(y, theta, xi), self.inverse_log_det_jacobian(
             y, theta, xi
         )

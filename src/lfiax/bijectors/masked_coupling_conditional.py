@@ -43,10 +43,6 @@ class MaskedConditionalCoupling(MaskedCoupling):
         """Computes y = f(x|z) and log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
         masked_x = jnp.where(self._event_mask, x, 0.0)
-        # breakpoint()
-        # testy = jnp.divide(jnp.subtract(masked_x, jnp.expand_dims(jnp.mean(masked_x, axis=1), axis=1)), jnp.expand_dims(jnp.std(masked_x, axis=1), axis=1))
-        # testy = jnp.divide(jnp.subtract(masked_x, jnp.expand_dims(jnp.mean(masked_x, axis=1), axis=0)), jnp.expand_dims(jnp.std(masked_x, axis=1), axis=0))
-        # jax.debug.breakpoint()
         # TODO: Better logic to detect when scalar x
         params = self._conditioner(masked_x, theta, xi)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
