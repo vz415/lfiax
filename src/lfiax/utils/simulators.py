@@ -153,7 +153,7 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     mu = jnp.zeros(theta_shape)
     sigma = (3**2) * jnp.ones(theta_shape)
 
-    base_distribution = distrax.Independent(  # Should this be independent?
+    base_distribution = distrax.Independent(
         distrax.MultivariateNormalDiag(mu, sigma)
     )
 

@@ -12,7 +12,7 @@ def scalar_conditioner_mlp(
     event_shape: Sequence[int],
     hidden_sizes: Sequence[int],
     num_bijector_params: int,
-    standardize_theta: bool = False,
+    standardize_theta: bool = True,
     resnet: bool = True,
 ) -> hk.Module:
     class ScalarConditionerModule(hk.Module):
