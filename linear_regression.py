@@ -130,7 +130,7 @@ class Workspace:
             
             (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
                 lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, log_prob_fun, designs, scale_factor, N=N, M=M
+                flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
@@ -138,8 +138,8 @@ class Workspace:
 
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
-
-            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[0], grads[1], xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG
+            
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG
         
          # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
@@ -188,15 +188,14 @@ class Workspace:
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
         # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / (jnp.std(xi_params['xi']) + 1e-10)
 
-        # TODO: swap in scaled xi params to optimization routine.
         opt_state_xi = optimizer2.init(xi_params_max_norm)
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, flow_grads, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG = update_pce(
+            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG = update_pce(
                 flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
             )
-            
+            # breakpoint()
             if jnp.any(jnp.isnan(xi_grads['xi'])):
                 print("Gradients contain NaNs. Breaking out of loop.")
                 break

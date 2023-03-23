@@ -178,10 +178,10 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
 
     # perform forward pass
     if d.shape[-1] == 1:
-        # "d" becomes (2, 1) shape whenever passing lists. weird.
+        # "d" becomes (2, 1) shape whenever passing lists.
         y = jnp.matmul(jnp.expand_dims(priors[:,0], -1), jnp.expand_dims(d, 0))
     else:
-        # Designs are a length-2 array
+        # Designs are a length-2 arrays.
         y = jnp.matmul(jnp.expand_dims(priors[:,0], -1), jnp.expand_dims(d, 0)).squeeze()
     y = jnp.add(jnp.expand_dims(priors[:, 1], -1), y)
     y_noised = jnp.add(y, sigma)

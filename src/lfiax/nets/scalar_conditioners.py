@@ -19,7 +19,12 @@ def scalar_conditioner_mlp(
         def __call__(self, x, theta, xi):
             """z represents the conditioned values."""
             if standardize_theta:
-                theta = hk.BatchNorm(theta)
+                theta = jnp.divide(
+                    jnp.subtract(theta, jnp.mean(theta, axis=0)), 
+                    jnp.std(theta, axis=0) + 1e-10
+                    )
+                # TODO: implement by creating stateful function
+                # theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((theta, xi), axis=1)
