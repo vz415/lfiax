@@ -22,7 +22,7 @@ class ConditionalTransformed(Transformed):
         super().__init__(distribution, flow)
 
     def _sample_n(
-        self, key: PRNGKey, n: int, theta: Array, xi: Array
+        self, key: PRNGKey, n: int, theta: Array, xi: Array,
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)

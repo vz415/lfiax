@@ -7,6 +7,7 @@ import os
 import csv, time
 import pickle as pkl
 import math
+import random
 
 import jax
 import jax.numpy as jnp
@@ -24,7 +25,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from lfiax.flows.nsf import make_nsf
-from lfiax.utils.oed_losses import lfi_pce_eig_scan
+from lfiax.utils.oed_losses import lf_pce_eig_scan
+from lfiax.utils.simulators import sim_linear_data_vmap
 # from lfiax.utils.utils import jax_lexpand
 
 from typing import (
@@ -41,6 +43,43 @@ PRNGKey = Array
 Batch = Mapping[str, np.ndarray]
 OptState = Any
 
+
+# TODO: Make prior outside of the simulator so you can sample and pass it around
+def make_lin_reg_prior():
+    theta_shape = (2,)
+
+    mu = jnp.zeros(theta_shape)
+    sigma = (3**2) * jnp.ones(theta_shape)
+
+    prior = distrax.Independent(
+        distrax.MultivariateNormalDiag(mu, sigma)
+    )
+    return prior
+
+
+@jax.jit
+def standard_scale(x):
+    def single_column_fn(x):
+        mean = jnp.mean(x)
+        std = jnp.std(x) + 1e-10
+        return (x - mean) / std
+        
+    def multi_column_fn(x):
+        mean = jnp.mean(x, axis=0, keepdims=True)
+        std = jnp.std(x, axis=0, keepdims=True) + 1e-10
+        return (x - mean) / std
+        
+    scaled_x = jax.lax.cond(
+        x.shape[-1] == 1,
+        single_column_fn,
+        multi_column_fn,
+        x
+    )
+    return scaled_x
+
+@jax.jit
+def inverse_standard_scale(scaled_x, shift, scale):
+    return (scaled_x + shift) * scale
 
 class Workspace:
     def __init__(self, cfg):
@@ -80,11 +119,18 @@ class Workspace:
         self.M = self.cfg.contrastive_sampling.M
         self.N = self.cfg.contrastive_sampling.N
 
-        # flow's params
+        # likelihood flow's params
         flow_num_layers = self.cfg.flow_params.num_layers
         mlp_num_layers = self.cfg.flow_params.mlp_num_layers
         hidden_size = self.cfg.flow_params.mlp_hidden_size
         num_bins = self.cfg.flow_params.num_bins
+
+        # vi flow's parameters
+        vi_flow_num_layers = self.cfg.vi_flow_params.num_layers
+        vi_mlp_num_layers = self.cfg.vi_flow_params.mlp_num_layers
+        vi_hidden_size = self.cfg.vi_flow_params.mlp_hidden_size
+        vi_num_bins = self.cfg.vi_flow_params.num_bins
+        self.vi_samples = self.cfg.vi_flow_params.vi_samples
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
@@ -95,41 +141,81 @@ class Workspace:
         self.xi_lr_end = 1e-4
 
 
+        # TODO: reduce boilerplate code.
         # @hk.transform_with_state
         @hk.without_apply_rng
         @hk.transform
-        def log_prob(data: Array, theta: Array, xi: Array) -> Array:
+        def log_prob(x: Array, theta: Array, xi: Array) -> Array:
+            x_scaled = standard_scale(x)
+            # If this is the wrong shape, grads don't flow :(
+            if x.shape[-1] == 1:
+                x_scaled = x_scaled.squeeze(0)
             # TODO: Pass more nsf parameters from config.yaml
             model = make_nsf(
                 event_shape=self.EVENT_SHAPE,
                 num_layers=flow_num_layers,
                 hidden_sizes=[hidden_size] * mlp_num_layers,
                 num_bins=num_bins,
-                standardize_x=True,
                 standardize_theta=True,
                 use_resnet=True,
-                event_dim=EVENT_DIM,
+                conditional=True
             )
-            return model.log_prob(data, theta, xi)
+            return model.log_prob(x_scaled, theta, xi)
+        
+        @hk.without_apply_rng
+        @hk.transform
+        def vi_log_prob(theta: Array) -> Array:
+            theta_scaled = standard_scale(theta)
+            model = make_nsf(
+                event_shape=self.theta_shape,
+                num_layers=vi_flow_num_layers,
+                hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
+                num_bins=vi_num_bins,
+                use_resnet=True,
+                conditional=False
+            )
+            return model.log_prob(theta_scaled)
 
         self.log_prob = log_prob
+        self.vi_log_prob = vi_log_prob
 
+        @hk.without_apply_rng
+        @hk.transform
+        def vi_sample(key: PRNGKey, num_samples: int,
+                        shift: Array, scale: Array) -> Array:
+            """vi is sampling the posterior distributuion so doesn't need
+            conditional information. Just uses distrax bijector layers.
+            """
+            model = make_nsf(
+                event_shape=self.theta_shape,
+                num_layers=vi_flow_num_layers,
+                hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
+                num_bins=vi_num_bins,
+                use_resnet=True,
+                conditional=False
+            )
+            samples = model._sample_n(key=key, 
+                                    n=[num_samples]
+                                    )
+            return inverse_standard_scale(samples, shift, scale)
+        
+        self.vi_sample = vi_sample
 
     def run(self) -> Callable:
         tic = time.time()
 
-        @partial(jax.jit, static_argnums=[5,6,7])
+        @partial(jax.jit, static_argnums=[5,6])
         def update_pce(
             flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
             opt_state: OptState, opt_state_xi: OptState, N: int, M: int, \
-            scale_factor: int, designs: Array,
+            designs: Array,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
             (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
-                lfi_pce_eig_scan, argnums=[0,1], has_aux=True)(
+                lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
                 flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M
                 )
             
@@ -153,6 +239,7 @@ class Workspace:
         optimizer = optax.adam(self.learning_rate)
         opt_state = optimizer.init(params)
 
+        # TODO: Put this up in the initialization code
         if self.xi_scheduler == "None":
             schedule = self.xi_lr_init
         elif self.xi_scheduler == "Linear":
@@ -193,16 +280,16 @@ class Workspace:
 
         for step in range(self.training_steps):
             flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG = update_pce(
-                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, scale_factor=scale_factor, designs=self.d_sim, 
+                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
             )
-            # breakpoint()
+            
             if jnp.any(jnp.isnan(xi_grads['xi'])):
                 print("Gradients contain NaNs. Breaking out of loop.")
                 break
             
             # Calculate the KL-div before updating designs
-            log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
-            kl_div = jnp.mean(log_probs - conditional_lp)
+            like_log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
+            kl_div = jnp.mean(like_log_probs - conditional_lp)
             
             # Setting bounds on the designs
             xi_params_max_norm['xi'] = jnp.clip(
@@ -227,6 +314,68 @@ class Workspace:
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+        
+        # ---------------------------------
+        # Approximate the posterior using VI
+        prior = make_lin_reg_prior()
+
+        # Evaluate the log-prior for all prior samples
+        prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(self.vi_samples))
+        
+        xi = jnp.broadcast_to(xi_params['xi'], (self.vi_samples, xi_params['xi'].shape[-1]))
+        
+        x, prior_samples, _, _ = sim_linear_data_vmap(self.d_sim, self.vi_samples, next(prng_seq))
+        # TODO: Figure out prior_samples shape and simulate the correct response
+        log_likelihoods = self.log_prob.apply(flow_params, x, prior_samples, xi)
+
+        vi_params = self.vi_log_prob.init(
+            next(prng_seq),
+            np.zeros((1, *self.theta_shape)),
+        )
+
+        vi_optimizer = optax.adam(self.learning_rate)
+
+        @jax.jit
+        def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
+            log_q = self.vi_log_prob.apply(vi_params, prior_samples)
+            log_joint = likelihood_log_probs + prior_log_probs
+            return -jnp.mean(log_joint - log_q)
+
+        @jax.jit
+        def vi_update(params: hk.Params,
+                      opt_state: OptState,
+                      prior_samples,
+                      likelihood_log_probs,
+                      prior_log_probs,
+                      ) -> Tuple[hk.Params, OptState]:
+            """Single SGD update step of the VI posterior."""
+            grads = jax.grad(vi_objective)(
+                vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
+            updates, new_opt_state = vi_optimizer.update(grads, opt_state)
+            new_params = optax.apply_updates(params, updates)
+            return new_params, new_opt_state
+        
+        vi_opt_state = vi_optimizer.init(vi_params)
+
+        for i in range(10):
+            vi_params, vi_opt_state = vi_update(
+                vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
+            
+            # if i % 10 == 0:
+            #     print(f"Iteration {i}, ELBO: {-value}")
+
+        # Sample from the optimized variational family to approximate the posterior
+        # TODO: Implement sample function to use for evaluation metrics
+        shift = jnp.mean(prior_samples)
+        scale = jnp.std(prior_samples)
+        posterior_samples = self.vi_sample.apply(
+            vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
+            )
+        
+        # TODO: A bunch of posterior predictive checks
+        # ------------------------------
+        # Posterior checks
+
 
 
 from linear_regression import Workspace as W

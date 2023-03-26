@@ -29,12 +29,20 @@ flow_params:
   mlp_hidden_size: 128
   num_bins: 4
 
+vi_flow_params:
+  num_layers: 5
+  mlp_num_layers: 4
+  mlp_hidden_size: 128
+  num_bins: 4
+  vi_samples: 100
+
 optimization_params:
+  # TODO: Make VI optimizer params
   learning_rate: 1e-3
   xi_learning_rate: 1e-2
   xi_optimizer: "Adam"
   xi_scheduler: "None"
-  training_steps: 1000
+  training_steps: 10 #00
 
 
 hydra:
