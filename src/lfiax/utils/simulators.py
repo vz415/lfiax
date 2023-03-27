@@ -191,6 +191,48 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     return y_noised, priors, y, sigma
 
 
+@jax.jit
+def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
+    """
+    Returns data in a format suitable for normalizing flow training.
+    Data will be in shape (y, thetas, d). The `y` variable can vary in size.
+    
+    Uses theta drawn from theta. Theta should be in the shape [num_samples, 2].
+    """
+    keys = jrandom.split(key, 2)
+
+    # Simulating noise and response
+    noise_shape = (1,)
+
+    mu_noise = jnp.zeros(noise_shape)
+    sigma_noise = jnp.ones(noise_shape)
+
+    n_n = distrax.Independent(
+        distrax.MultivariateNormalDiag(mu_noise, sigma_noise)
+    ).sample(seed=keys[0], sample_shape=[len(theta), d.shape[-1]])
+
+    # sample random gamma noise
+    n_g = distrax.Gamma(2.0, 0.5).sample(
+        seed=keys[1], sample_shape=[len(theta), d.shape[-1]]
+    )
+
+    sigma = n_g + jnp.squeeze(n_n, -1)
+
+    # perform forward pass
+    if d.shape[-1] == 1:
+        # "d" becomes (2, 1) shape whenever passing lists.
+        y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0))
+    else:
+        # Designs are a length-2 arrays.
+        y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0)).squeeze()
+    y = jnp.add(jnp.expand_dims(theta[:, 1], -1), y)
+    y_noised = jnp.add(y, sigma)
+    
+    ygrads = theta[:, 1]
+
+    return y_noised, y, sigma
+
+
 def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow trainin using

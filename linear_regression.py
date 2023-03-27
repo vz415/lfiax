@@ -2,7 +2,6 @@ import omegaconf
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import wandb
-from collections import deque
 import os
 import csv, time
 import pickle as pkl
@@ -26,7 +25,7 @@ import tensorflow_datasets as tfds
 
 from lfiax.flows.nsf import make_nsf
 from lfiax.utils.oed_losses import lf_pce_eig_scan
-from lfiax.utils.simulators import sim_linear_data_vmap
+from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
 # from lfiax.utils.utils import jax_lexpand
 
 from typing import (
@@ -181,6 +180,29 @@ class Workspace:
 
         @hk.without_apply_rng
         @hk.transform
+        def likelihood_sample(key: PRNGKey, num_samples: int,
+                        shift: Array, scale: Array,
+                        x: Array, theta: Array, xi: Array) -> Array:
+            # Does sampling the likelihood require x?
+            """vi is sampling the posterior distributuion so doesn't need
+            conditional information. Just uses distrax bijector layers.
+            """
+            model = make_nsf(
+                event_shape=self.EVENT_SHAPE,
+                num_layers=flow_num_layers,
+                hidden_sizes=[hidden_size] * mlp_num_layers,
+                num_bins=num_bins,
+                standardize_theta=True,
+                use_resnet=True,
+                conditional=True
+            )
+            samples = model._sample_n(key=key, 
+                                    n=[num_samples]
+                                    )
+            return inverse_standard_scale(samples, shift, scale)
+        
+        @hk.without_apply_rng
+        @hk.transform
         def vi_sample(key: PRNGKey, num_samples: int,
                         shift: Array, scale: Array) -> Array:
             """vi is sampling the posterior distributuion so doesn't need
@@ -199,6 +221,7 @@ class Workspace:
                                     )
             return inverse_standard_scale(samples, shift, scale)
         
+        self.likelihood_sample = likelihood_sample
         self.vi_sample = vi_sample
 
     def run(self) -> Callable:
@@ -324,6 +347,7 @@ class Workspace:
         
         xi = jnp.broadcast_to(xi_params['xi'], (self.vi_samples, xi_params['xi'].shape[-1]))
         
+        # Simulate data using the prior
         x, prior_samples, _, _ = sim_linear_data_vmap(self.d_sim, self.vi_samples, next(prng_seq))
         # TODO: Figure out prior_samples shape and simulate the correct response
         log_likelihoods = self.log_prob.apply(flow_params, x, prior_samples, xi)
@@ -360,9 +384,6 @@ class Workspace:
         for i in range(10):
             vi_params, vi_opt_state = vi_update(
                 vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
-            
-            # if i % 10 == 0:
-            #     print(f"Iteration {i}, ELBO: {-value}")
 
         # Sample from the optimized variational family to approximate the posterior
         # TODO: Implement sample function to use for evaluation metrics
@@ -371,10 +392,20 @@ class Workspace:
         posterior_samples = self.vi_sample.apply(
             vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
             )
+        breakpoint()
         
-        # TODO: A bunch of posterior predictive checks
         # ------------------------------
         # Posterior checks
+        # 1. PPC check
+        # 1a. Generate samples x_pp and compare with x_o.
+        # Simulate data using posterior samples - invalid if no previous designs seen.
+        # TODO: Make simulator function that just takes d, x, and theta - not random.
+        x_pp, _, _ = sim_linear_data_vmap_theta(self.d_sim, posterior_samples, next(prng_seq))
+        # 1b. Plot.
+
+
+        # 2. SBC check
+
 
 
 
