@@ -137,7 +137,41 @@ class Workspace:
         self.training_steps = self.cfg.optimization_params.training_steps
         self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
         self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
-        self.xi_lr_end = 1e-4
+        self.xi_lr_end = self.cfg.optimization_params.xi_lr_end
+
+        # Scheduler to use
+        if self.xi_scheduler == "None":
+            self.schedule = self.xi_lr_init
+        elif self.xi_scheduler == "Linear":
+            self.schedule = optax.linear_schedule(self.xi_lr_init, self.xi_lr_end, transition_steps=self.training_steps)
+        elif self.xi_scheduler == "Exponential":
+            self.schedule = optax.exponential_decay(
+                init_value=self.xi_lr_init,
+                transition_steps=self.training_steps,
+                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / self.training_steps),
+                staircase=False
+            )
+        elif self.xi_scheduler == "CosineDecay":
+            lr_values = self.cfg.optimization_params.lr_values
+            restarts = self.cfg.optimization_params.restarts
+            decay_steps = self.training_steps / restarts
+            def cosine_decay_multirestart_schedules(
+                    lr_values, decay_steps, restarts, alpha=0.0, exponent=1.0):
+                schedules = []
+                boundaries = []
+                for i in range(restarts):
+                    lr = lr_values[i % len(lr_values)]
+                    d = decay_steps * (i + 1)
+                    s = optax.cosine_decay_schedule(
+                        lr, decay_steps, alpha=alpha)
+                    schedules.append(s)
+                    boundaries.append(d)
+                return optax.join_schedules(schedules, boundaries)
+
+            self.schedule = cosine_decay_multirestart_schedules(
+                lr_values, decay_steps, restarts, alpha=self.xi_lr_end)
+        else:
+            raise AssertionError("Specified unsupported scheduler.")
 
 
         # TODO: reduce boilerplate code.
@@ -145,10 +179,12 @@ class Workspace:
         @hk.without_apply_rng
         @hk.transform
         def log_prob(x: Array, theta: Array, xi: Array) -> Array:
-            x_scaled = standard_scale(x)
-            # If this is the wrong shape, grads don't flow :(
-            if x.shape[-1] == 1:
-                x_scaled = x_scaled.squeeze(0)
+            '''Up to user to appropriately scale their inputs :).'''
+            # x_scaled = standard_scale(x)
+            # x_mean, x_std = jnp.mean(x), jnp.std(x) + 1e-10
+            # # If this is the wrong shape, grads don't flow :(
+            # if len(x_scaled.shape) > 2:
+            #     x_scaled = x_scaled.squeeze(0)
             # TODO: Pass more nsf parameters from config.yaml
             model = make_nsf(
                 event_shape=self.EVENT_SHAPE,
@@ -159,7 +195,7 @@ class Workspace:
                 use_resnet=True,
                 conditional=True
             )
-            return model.log_prob(x_scaled, theta, xi)
+            return model.log_prob(x, theta, xi)
         
         @hk.without_apply_rng
         @hk.transform
@@ -237,7 +273,7 @@ class Workspace:
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
-            (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG)), grads = jax.value_and_grad(
+            (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)), grads = jax.value_and_grad(
                 lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
                 flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M
                 )
@@ -248,9 +284,9 @@ class Workspace:
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
             
-            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG
+            return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std
         
-         # Initialize the net's params
+        # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
         params = self.log_prob.init(
             next(prng_seq),
@@ -262,29 +298,14 @@ class Workspace:
         optimizer = optax.adam(self.learning_rate)
         opt_state = optimizer.init(params)
 
-        # TODO: Put this up in the initialization code
-        if self.xi_scheduler == "None":
-            schedule = self.xi_lr_init
-        elif self.xi_scheduler == "Linear":
-            schedule = optax.linear_schedule(self.xi_lr_init, self.xi_lr_end, transition_steps=self.training_steps)
-        elif self.xi_scheduler == "Exponential":
-            schedule = optax.exponential_decay(
-                init_value=self.xi_lr_init,
-                transition_steps=self.training_steps,
-                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / self.training_steps),
-                staircase=False
-            )
-        else:
-            raise AssertionError("Specified unsupported scheduler.")
-
         if self.xi_optimizer == "Adam":
-            optimizer2 = optax.adam(learning_rate=schedule)
+            optimizer2 = optax.adam(learning_rate=self.schedule)
         elif self.xi_optimizer == "SGD":
-            optimizer2 = optax.sgd(learning_rate=schedule)
+            optimizer2 = optax.sgd(learning_rate=self.schedule)
         elif self.xi_optimizer == "Yogi":
-            optimizer2 = optax.yogi(learning_rate=schedule)
+            optimizer2 = optax.yogi(learning_rate=self.schedule)
         elif self.xi_optimizer == "AdaBelief":
-            optimizer2 = optax.adabelief(learning_rate=schedule)
+            optimizer2 = optax.adabelief(learning_rate=self.schedule)
         
         # This could be initialized by a distribution of designs!
         params['xi'] = self.xi
@@ -296,13 +317,14 @@ class Workspace:
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
         xi_params_max_norm = {}
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
+        # TODO: try normal scaling the xi_params to get more consistent training
         # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / (jnp.std(xi_params['xi']) + 1e-10)
 
         opt_state_xi = optimizer2.init(xi_params_max_norm)
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
 
         for step in range(self.training_steps):
-            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG = update_pce(
+            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std = update_pce(
                 flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
             )
             
@@ -311,8 +333,8 @@ class Workspace:
                 break
             
             # Calculate the KL-div before updating designs
-            like_log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
-            kl_div = jnp.mean(like_log_probs - conditional_lp)
+            exp_like_log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
+            kl_div = jnp.mean(exp_like_log_probs - conditional_lp)
             
             # Setting bounds on the designs
             xi_params_max_norm['xi'] = jnp.clip(
@@ -339,68 +361,89 @@ class Workspace:
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         
         # ---------------------------------
-        # Approximate the posterior using VI
+        # Approximate the posterior by adding log prior and likelihood
         prior = make_lin_reg_prior()
 
         # Evaluate the log-prior for all prior samples
-        prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(self.vi_samples))
+        prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(1_000))
+
+        true_theta = jnp.array([[2,5]])
+
+        # Simulate real data using true simulator and noise
+        x_obs, _, _ = sim_linear_data_vmap_theta(self.d_sim, true_theta, next(prng_seq))
+
+        xi_test = jnp.broadcast_to(
+            xi_params['xi'], (len(prior_samples), xi_params['xi'].shape[-1]))
+
+        x_obs_test = jnp.broadcast_to(
+            x_obs.squeeze(0), (len(prior_samples), x_obs.shape[-1]))
         
-        xi = jnp.broadcast_to(xi_params['xi'], (self.vi_samples, xi_params['xi'].shape[-1]))
+        # Getting the posterior by adding the log_probs fo likelihood and prior
+        liklelihoods = self.log_prob.apply(flow_params, x_obs_test, prior_samples, xi_test)
         
-        # Simulate data using the prior
-        x, prior_samples, _, _ = sim_linear_data_vmap(self.d_sim, self.vi_samples, next(prng_seq))
-        # TODO: Figure out prior_samples shape and simulate the correct response
-        log_likelihoods = self.log_prob.apply(flow_params, x, prior_samples, xi)
 
-        vi_params = self.vi_log_prob.init(
-            next(prng_seq),
-            np.zeros((1, *self.theta_shape)),
-        )
+        # # ---------------------------------
+        # # Approximate the posterior using VI
+        # prior = make_lin_reg_prior()
 
-        vi_optimizer = optax.adam(self.learning_rate)
-
-        @jax.jit
-        def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
-            log_q = self.vi_log_prob.apply(vi_params, prior_samples)
-            log_joint = likelihood_log_probs + prior_log_probs
-            return -jnp.mean(log_joint - log_q)
-
-        @jax.jit
-        def vi_update(params: hk.Params,
-                      opt_state: OptState,
-                      prior_samples,
-                      likelihood_log_probs,
-                      prior_log_probs,
-                      ) -> Tuple[hk.Params, OptState]:
-            """Single SGD update step of the VI posterior."""
-            grads = jax.grad(vi_objective)(
-                vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
-            updates, new_opt_state = vi_optimizer.update(grads, opt_state)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state
+        # # Evaluate the log-prior for all prior samples
+        # prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(self.vi_samples))
         
-        vi_opt_state = vi_optimizer.init(vi_params)
-
-        for i in range(10):
-            vi_params, vi_opt_state = vi_update(
-                vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
-
-        # Sample from the optimized variational family to approximate the posterior
-        # TODO: Implement sample function to use for evaluation metrics
-        shift = jnp.mean(prior_samples)
-        scale = jnp.std(prior_samples)
-        posterior_samples = self.vi_sample.apply(
-            vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
-            )
-        breakpoint()
+        # xi = jnp.broadcast_to(xi_params['xi'], (self.vi_samples, xi_params['xi'].shape[-1]))
         
-        # ------------------------------
-        # Posterior checks
-        # 1. PPC check
-        # 1a. Generate samples x_pp and compare with x_o.
-        # Simulate data using posterior samples - invalid if no previous designs seen.
-        # TODO: Make simulator function that just takes d, x, and theta - not random.
-        x_pp, _, _ = sim_linear_data_vmap_theta(self.d_sim, posterior_samples, next(prng_seq))
+        # # Simulate data using the prior
+        # x, prior_samples, _, _ = sim_linear_data_vmap(self.d_sim, self.vi_samples, next(prng_seq))
+        # # TODO: Figure out prior_samples shape and simulate the correct response
+        # log_likelihoods = self.log_prob.apply(flow_params, x, prior_samples, xi)
+
+        # vi_params = self.vi_log_prob.init(
+        #     next(prng_seq),
+        #     np.zeros((1, *self.theta_shape)),
+        # )
+
+        # vi_optimizer = optax.adam(self.learning_rate)
+
+        # @jax.jit
+        # def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
+        #     log_q = self.vi_log_prob.apply(vi_params, prior_samples)
+        #     log_joint = likelihood_log_probs + prior_log_probs
+        #     return -jnp.mean(log_joint - log_q)
+
+        # @jax.jit
+        # def vi_update(params: hk.Params,
+        #               opt_state: OptState,
+        #               prior_samples,
+        #               likelihood_log_probs,
+        #               prior_log_probs,
+        #               ) -> Tuple[hk.Params, OptState]:
+        #     """Single SGD update step of the VI posterior."""
+        #     grads = jax.grad(vi_objective)(
+        #         vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
+        #     updates, new_opt_state = vi_optimizer.update(grads, opt_state)
+        #     new_params = optax.apply_updates(params, updates)
+        #     return new_params, new_opt_state
+        
+        # vi_opt_state = vi_optimizer.init(vi_params)
+
+        # for i in range(10):
+        #     vi_params, vi_opt_state = vi_update(
+        #         vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
+
+        # # Sample from the optimized variational family to approximate the posterior
+        # # TODO: Implement sample function to use for evaluation metrics
+        # shift = jnp.mean(prior_samples)
+        # scale = jnp.std(prior_samples)
+        # posterior_samples = self.vi_sample.apply(
+        #     vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
+        #     )
+        
+        # # ------------------------------
+        # # Posterior checks
+        # # 1. PPC check
+        # # 1a. Generate samples x_pp and compare with x_o.
+        # # Simulate data using posterior samples - invalid if no previous designs seen.
+        # # TODO: Make simulator function that just takes d, x, and theta - not random.
+        # x_pp, _, _ = sim_linear_data_vmap_theta(self.d_sim, posterior_samples, next(prng_seq))
         # 1b. Plot.
 
 

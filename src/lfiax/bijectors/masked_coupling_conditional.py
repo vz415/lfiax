@@ -47,10 +47,11 @@ class MaskedConditionalCoupling(MaskedCoupling):
         params = self._conditioner(masked_x, theta, xi)
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
         # TODO: Check that this makes sense for scalars...
-        if masked_x.shape[1] > 1:
-            y = jnp.where(self._event_mask, x, y0)
-        else:
-            y = y0
+        # if masked_x.shape[1] > 1 or len(masked_x) > 1:
+        y = y0
+        if len(masked_x) > 1:
+            if masked_x.shape[1] > 1:
+                y = jnp.where(self._event_mask, x, y0)
         logdet = math.sum_last(
             jnp.where(self._mask, 0.0, log_d),
             self._event_ndims - self._inner_event_ndims,

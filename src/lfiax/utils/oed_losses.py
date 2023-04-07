@@ -103,15 +103,16 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     # `designs` are combos of previous designs and proposed (non-scaled) designs
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
     
-    # scaled_x = standard_scale(x)
-    # # If this is the wrong shape, grads don't flow :(
-    # if xi_params['xi'].shape[-1] == 1:
-    #     scaled_x = scaled_x.squeeze(0)
+    scaled_x = standard_scale(x)
+    x_mean, x_std = jnp.mean(x), jnp.std(x) + 1e-10
+    # If this is the wrong shape, grads don't flow :(
+    if len(scaled_x.shape) > 2:
+        scaled_x = scaled_x.squeeze(0)
         
-    conditional_lp = log_prob_fun(flow_params, x, theta_0, xi)
+    conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
-        keys[1:M+1], log_prob_fun, M, N, x, conditional_lp_exp
+        keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
         ) - jnp.log(M+1)
     
     # EIG = jnp.sum(conditional_lp - marginal_lp)
@@ -128,7 +129,7 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
     loss = EIG + jnp.mean(conditional_lp)
     
-    return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG)
+    return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)
 
 @partial(jax.jit, static_argnums=[3,5,6])
 def lf_ace_eig_scan(flow_params: hk.Params, xi_params: hk.Params, 
@@ -155,6 +156,7 @@ def lf_ace_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     
     scaled_x = standard_scale(x)
     # If this is the wrong shape, grads don't flow :(
+    
     if xi_params['xi'].shape[-1] == 1:
         scaled_x = scaled_x.squeeze(0)
     conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
