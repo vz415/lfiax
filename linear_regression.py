@@ -83,15 +83,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -358,28 +358,28 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         
         # ---------------------------------
         # Approximate the posterior by adding log prior and likelihood
-        prior = make_lin_reg_prior()
+        # prior = make_lin_reg_prior()
 
-        # Evaluate the log-prior for all prior samples
-        prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(1_000))
+        # # Evaluate the log-prior for all prior samples
+        # prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(1_000))
 
-        true_theta = jnp.array([[2,5]])
+        # true_theta = jnp.array([[2,5]])
 
-        # Simulate real data using true simulator and noise
-        x_obs, _, _ = sim_linear_data_vmap_theta(self.d_sim, true_theta, next(prng_seq))
+        # # Simulate real data using true simulator and noise
+        # x_obs, _, _ = sim_linear_data_vmap_theta(self.d_sim, true_theta, next(prng_seq))
 
-        xi_test = jnp.broadcast_to(
-            xi_params['xi'], (len(prior_samples), xi_params['xi'].shape[-1]))
+        # xi_test = jnp.broadcast_to(
+        #     xi_params['xi'], (len(prior_samples), xi_params['xi'].shape[-1]))
 
-        x_obs_test = jnp.broadcast_to(
-            x_obs.squeeze(0), (len(prior_samples), x_obs.shape[-1]))
+        # x_obs_test = jnp.broadcast_to(
+        #     x_obs.squeeze(0), (len(prior_samples), x_obs.shape[-1]))
         
-        # Getting the posterior by adding the log_probs fo likelihood and prior
-        liklelihoods = self.log_prob.apply(flow_params, x_obs_test, prior_samples, xi_test)
+        # # Getting the posterior by adding the log_probs fo likelihood and prior
+        # liklelihoods = self.log_prob.apply(flow_params, x_obs_test, prior_samples, xi_test)
         
 
         # # ---------------------------------
