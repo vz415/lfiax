@@ -349,59 +349,59 @@ def main():
 
         # ---------------------------------
         # Approximate the posterior using VI
-        prior = make_lin_reg_prior()
+        # prior = make_lin_reg_prior()
 
-        # Evaluate the log-prior for all prior samples
-        prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(vi_samples))
+        # # Evaluate the log-prior for all prior samples
+        # prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(vi_samples))
 
-        xi = jnp.broadcast_to(xi_params['xi'], (vi_samples, xi_params['xi'].shape[-1]))
+        # xi = jnp.broadcast_to(xi_params['xi'], (vi_samples, xi_params['xi'].shape[-1]))
 
-        # Simulate data using the prior
-        x, prior_samples, _, _ = sim_linear_data_vmap(d_sim, vi_samples, next(prng_seq))
-        # TODO: Figure out prior_samples shape and simulate the correct response
-        log_likelihoods = log_prob.apply(flow_params, x, prior_samples, xi)
+        # # Simulate data using the prior
+        # x, prior_samples, _, _ = sim_linear_data_vmap(d_sim, vi_samples, next(prng_seq))
+        # # TODO: Figure out prior_samples shape and simulate the correct response
+        # log_likelihoods = log_prob.apply(flow_params, x, prior_samples, xi)
 
-        vi_params = vi_log_prob.init(
-            next(prng_seq),
-            np.zeros((1, *theta_shape)),
-        )
+        # vi_params = vi_log_prob.init(
+        #     next(prng_seq),
+        #     np.zeros((1, *theta_shape)),
+        # )
 
-        vi_optimizer = optax.adam(learning_rate)
+        # vi_optimizer = optax.adam(learning_rate)
 
-        @jax.jit
-        def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
-            log_q = vi_log_prob.apply(vi_params, prior_samples)
-            log_joint = likelihood_log_probs + prior_log_probs
-            return -jnp.mean(log_joint - log_q)
+        # @jax.jit
+        # def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
+        #     log_q = vi_log_prob.apply(vi_params, prior_samples)
+        #     log_joint = likelihood_log_probs + prior_log_probs
+        #     return -jnp.mean(log_joint - log_q)
 
-        @jax.jit
-        def vi_update(params: hk.Params,
-                    opt_state: OptState,
-                    prior_samples,
-                    likelihood_log_probs,
-                    prior_log_probs,
-                    ) -> Tuple[hk.Params, OptState]:
-            """Single SGD update step of the VI posterior."""
-            grads = jax.grad(vi_objective)(
-                vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
-            updates, new_opt_state = vi_optimizer.update(grads, opt_state)
-            new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state
+        # @jax.jit
+        # def vi_update(params: hk.Params,
+        #             opt_state: OptState,
+        #             prior_samples,
+        #             likelihood_log_probs,
+        #             prior_log_probs,
+        #             ) -> Tuple[hk.Params, OptState]:
+        #     """Single SGD update step of the VI posterior."""
+        #     grads = jax.grad(vi_objective)(
+        #         vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
+        #     updates, new_opt_state = vi_optimizer.update(grads, opt_state)
+        #     new_params = optax.apply_updates(params, updates)
+        #     return new_params, new_opt_state
 
-        vi_opt_state = vi_optimizer.init(vi_params)
+        # vi_opt_state = vi_optimizer.init(vi_params)
 
-        for i in range(10):
-            vi_params, vi_opt_state = vi_update(
-                vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
+        # for i in range(10):
+        #     vi_params, vi_opt_state = vi_update(
+        #         vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
 
-        # Sample from the optimized variational family to approximate the posterior
-        # TODO: Implement sample function to use for evaluation metrics
-        shift = jnp.mean(prior_samples)
-        scale = jnp.std(prior_samples)
-        # posterior_samples = vi_sample.apply(
-        #     vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
-        #     )
-        return vi_params
+        # # Sample from the optimized variational family to approximate the posterior
+        # # TODO: Implement sample function to use for evaluation metrics
+        # shift = jnp.mean(prior_samples)
+        # scale = jnp.std(prior_samples)
+        # # posterior_samples = vi_sample.apply(
+        # #     vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
+        # #     )
+        return flow_params, xi_params
         
     # Define the number of models to train in parallel
     num_models = 10
@@ -416,12 +416,14 @@ def main():
     num_processes = -1
 
     # Parallelize the training of the models using joblib
-    results = joblib.Parallel(n_jobs=num_processes)(
+    flow_params, xi_params = joblib.Parallel(n_jobs=num_processes)(
         joblib.delayed(train_single_model)(rng_key)
         for rng_key in rng_keys
     )
 
-    return results
+
+
+    return xi_params
 
 
 if __name__=="__main__":

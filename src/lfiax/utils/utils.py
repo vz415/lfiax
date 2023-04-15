@@ -2,12 +2,13 @@ import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
-from jax.scipy.stats import gaussian_kde
+from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 from typing import List, Optional, Tuple, Union
 
 import haiku as hk
 import numpy as np
+from scipy.stats import binom
 import tensorflow_datasets as tfds
 
 from typing import (
@@ -42,7 +43,7 @@ def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
 
 
 def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
-    """Helper function for preparing tfds splits for use in fliax."""
+    """[Legacy] Helper function for preparing tfds splits for use in fliax."""
     # TODO: add length arguments to function.
     # Batch is [y, thetas, d]
     data = batch.astype(np.float32)
@@ -54,166 +55,155 @@ def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Arra
     return x, theta, d, xi
 
 
-@hk.without_apply_rng
-@hk.transform
-def log_prob(data: Array, theta: Array, xi: Array) -> Array:
-    # Get batch
-    shift = data.mean(axis=0)
-    scale = data.std(axis=0) + 1e-14
+def sbc(prior, posterior, simulator, num_simulations=1_000, num_data_points=1_000, num_bins=None):
+    """
+    Compute the simulation-based calibration (SBC) histogram for the given prior and posterior
+    distributions.
 
-    model = make_nsf(
-        event_shape=EVENT_SHAPE,
-        num_layers=flow_num_layers,
-        hidden_sizes=[hidden_size] * mlp_num_layers,
-        num_bins=num_bins,
-        standardize_x=True,
-        standardize_theta=False,
-        use_resnet=True,
-        event_dim=EVENT_DIM,
-        shift=shift,
-        scale=scale,
-    )
-    return model.log_prob(data, theta, xi)
+    It's on the user to ensure that the right number of bins are used for plotting.
+
+    Args:
+        prior: A distribution object with sample and log_prob methods representing the prior distribution.
+        posterior: A distribution object with sample and log_prob methods representing the posterior distribution.
+        simulator: Callable object that produces an output. Can be replaced with explicit likelihood.
+        num_simulations: An integer representing the number of simulations to perform for the SBC (default: 1000).
+        num_bins: An optional integer representing the number of bins in the histogram. 
+                  If not provided, it will be calculated as num_simulations // 40. Represents
+                  the number of simulations for each posterior and ranks to check.
+
+    Returns:
+        sbc_histogram: A NumPy array representing the SBC histogram of rank statistics.
+    """
+    if num_bins is None:
+        num_bins = num_data_points // 40
+
+    def sbc_iteration(key):
+        # True theta values to use
+        theta_true = prior.sample(seed=key)
+        # likelihood given the prior
+        # TODO: for both of the following, add more contextual info (e.g. theta & xi)
+        x_o = simulator(theta_true)
+        # posterior given observed data
+        posteriors = posterior.sample(x_o, sample_shape=(num_data_points,))
+
+        # Rank of the sample
+        rank = jnp.sum(posteriors < theta_true)
+
+        # Scale the rank values to match the reduced number of bins
+        # rank_scaled = jnp.floor(rank * num_bins / num_simulations)
+
+        return rank
+
+    key = jrandom.PRNGKey(42)
+    keys = jrandom.split(key, num_simulations)
+    sbc_ranks = jax.vmap(sbc_iteration)(keys)
+
+    # Calculate the histogram using numpy.histogram
+    sbc_histogram, _ = np.histogram(sbc_ranks, bins=np.arange(num_bins + 1))
+    
+    return sbc_histogram
 
 
-# TODO: Finish this helper function by making dependent functions.
-def pairplot(
-    samples: Union[List[jnp.ndarray], jnp.ndarray],
-    points: Optional[
-        Union[List[jnp.ndarray], jnp.ndarray]
-    ] = None,
-    limits: Optional[Union[List, jnp.ndarray]] = None,
-    subset: Optional[List[int]] = None,
-    upper: Optional[str] = "hist",
-    diag: Optional[str] = "hist",
-    figsize: Tuple = (10, 10),
-    labels: Optional[List[str]] = None,
-    ticks: Union[List, jnp.ndarray] = [],
-    points_colors: List[str] = plt.rcParams["axes.prop_cycle"].by_key()["color"],
-    fig=None,
-    axes=None,
-    **kwargs,
-):
-    opts = _get_default_opts()
-    # update the defaults dictionary by the current values of the variables (passed by
-    # the user)
+def ks_test(sample1, sample2):
+    '''Two-sample KS-test.'''
+    sample1_sorted = jnp.sort(sample1)
+    sample2_sorted = jnp.sort(sample2)
+    sample1_size = sample1.shape[0]
+    sample2_size = sample2.shape[0]
+    
+    data_all = jnp.concatenate([sample1_sorted, sample2_sorted])
+    group_indicator = jnp.concatenate([jnp.zeros(sample1_size), jnp.ones(sample2_size)])
+    index_sorted = jnp.argsort(data_all)
+    
+    group_sorted = group_indicator[index_sorted]
+    d_plus = jnp.where(group_sorted == 1, 1 / sample2_size, 0)
+    d_minus = jnp.where(group_sorted == 0, 1 / sample1_size, 0)
+    
+    cdf_diff = jnp.cumsum(d_plus - d_minus)
+    ks_statistic = jnp.max(jnp.abs(cdf_diff))
+    
+    # Compute p-value using asymptotic distribution
+    n = sample1_size * sample2_size / (sample1_size + sample2_size)
+    p_value = np.exp(-2 * n * ks_statistic**2)
+    
+    return ks_statistic, p_value
 
-    opts = _update(opts, locals())
-    opts = _update(opts, kwargs)
+def c2st_accuracy(ranks: jnp.ndarray, uniforms: jnp.ndarray, num_folds: int = 5) -> float:
+    """
+    Perform the Classifier 2-Sample Test (C2ST) using a logistic regression classifier and
+    compute the average cross-validated accuracy.
 
-    samples, dim, limits = prepare_for_plot(samples, limits)
+    Args:
+        ranks: A JAX numpy array containing the first set of data samples (ranks in SBC).
+        uniforms: A JAX numpy array containing the second set of data samples (uniform samples in SBC).
+        num_folds: The number of folds to use for cross-validation (default is 5).
 
-    # Prepare diag/upper/lower
-    if type(opts["diag"]) is not list:
-        opts["diag"] = [opts["diag"] for _ in range(len(samples))]
-    if type(opts["upper"]) is not list:
-        opts["upper"] = [opts["upper"] for _ in range(len(samples))]
-    # if type(opts['lower']) is not list:
-    #    opts['lower'] = [opts['lower'] for _ in range(len(samples))]
-    opts["lower"] = None
+    Returns:
+        The average cross-validated accuracy of the classifier on the two datasets.
+    """
+    # Combine the data and create labels
+    data_combined = jnp.concatenate([ranks, uniforms])[:, None]
+    labels = jnp.concatenate([jnp.zeros(ranks.shape[0]), jnp.ones(uniforms.shape[0])])
 
-    diag_func = get_diag_func(samples, limits, opts, **kwargs)
+    # Define logistic regression model using Haiku
+    def logistic_regression_fn(x):
+        return hk.Sequential([hk.Linear(1), jax.nn.sigmoid])(x)
 
-    def upper_func(row, col, limits, **kwargs):
-        if len(samples) > 0:
-            for n, v in enumerate(samples):
-                if opts["upper"][n] == "hist" or opts["upper"][n] == "hist2d":
-                    hist, xedges, yedges = np.histogram2d(
-                        v[:, col],
-                        v[:, row],
-                        range=[
-                            [limits[col][0], limits[col][1]],
-                            [limits[row][0], limits[row][1]],
-                        ],
-                        **opts["hist_offdiag"],
-                    )
-                    plt.imshow(
-                        hist.T,
-                        origin="lower",
-                        extent=(
-                            xedges[0],
-                            xedges[-1],
-                            yedges[0],
-                            yedges[-1],
-                        ),
-                        aspect="auto",
-                    )
+    logistic_regression = hk.without_apply_rng(hk.transform(logistic_regression_fn))
 
-                elif opts["upper"][n] in [
-                    "kde",
-                    "kde2d",
-                    "contour",
-                    "contourf",
-                ]:
-                    density = gaussian_kde(
-                        v[:, [col, row]].T,
-                        bw_method=opts["kde_offdiag"]["bw_method"],
-                    )
-                    X, Y = np.meshgrid(
-                        np.linspace(
-                            limits[col][0],
-                            limits[col][1],
-                            opts["kde_offdiag"]["bins"],
-                        ),
-                        np.linspace(
-                            limits[row][0],
-                            limits[row][1],
-                            opts["kde_offdiag"]["bins"],
-                        ),
-                    )
-                    positions = np.vstack([X.ravel(), Y.ravel()])
-                    Z = np.reshape(density(positions).T, X.shape)
+    # Cross-validation
+    kf = KFold(n_splits=num_folds, shuffle=True)
+    accuracy_scores = []
 
-                    if opts["upper"][n] == "kde" or opts["upper"][n] == "kde2d":
-                        plt.imshow(
-                            Z,
-                            extent=(
-                                limits[col][0],
-                                limits[col][1],
-                                limits[row][0],
-                                limits[row][1],
-                            ),
-                            origin="lower",
-                            aspect="auto",
-                        )
-                    elif opts["upper"][n] == "contour":
-                        if opts["contour_offdiag"]["percentile"]:
-                            Z = probs2contours(Z, opts["contour_offdiag"]["levels"])
-                        else:
-                            Z = (Z - Z.min()) / (Z.max() - Z.min())
-                        plt.contour(
-                            X,
-                            Y,
-                            Z,
-                            origin="lower",
-                            extent=[
-                                limits[col][0],
-                                limits[col][1],
-                                limits[row][0],
-                                limits[row][1],
-                            ],
-                            colors=opts["samples_colors"][n],
-                            levels=opts["contour_offdiag"]["levels"],
-                        )
-                    else:
-                        pass
-                elif opts["upper"][n] == "scatter":
-                    plt.scatter(
-                        v[:, col],
-                        v[:, row],
-                        color=opts["samples_colors"][n],
-                        **opts["scatter_offdiag"],
-                    )
-                elif opts["upper"][n] == "plot":
-                    plt.plot(
-                        v[:, col],
-                        v[:, row],
-                        color=opts["samples_colors"][n],
-                        **opts["plot_offdiag"],
-                    )
-                else:
-                    pass
+    for train_indices, val_indices in kf.split(data_combined):
+        # Split the data into training and validation sets
+        x_train, x_val = data_combined[train_indices], data_combined[val_indices]
+        y_train, y_val = labels[train_indices], labels[val_indices]
 
-    return _arrange_plots(
-        diag_func, upper_func, dim, limits, points, opts, fig=fig, axes=axes
-    )
+        # Initialize parameters
+        params = logistic_regression.init(jrandom.PRNGKey(42), x_train)
+
+        # Define the loss function
+        def loss_fn(params, x, y):
+            logits = logistic_regression.apply(params, x)
+            return -jnp.mean(y * jnp.log(logits) + (1 - y) * jnp.log(1 - logits))
+
+        # Define the gradient function
+        grad_fn = jax.value_and_grad(loss_fn)
+
+        # Define the optimizer
+        opt = optax.adam(0.01)
+        opt_state = opt.init(params)
+
+        # Train the logistic regression model
+        for _ in range(500):
+            loss, grads = grad_fn(params, x_train, y_train)
+            updates, opt_state = opt.update(grads, opt_state)
+            params = optax.apply_updates(params, updates)
+
+        # Compute accuracy on the validation set
+        logits_val = logistic_regression.apply(params, x_val)
+        preds_val = jnp.round(logits_val).squeeze()
+        accuracy = jnp.mean(preds_val == y_val)
+        accuracy_scores.append(accuracy)
+
+    return jnp.mean(jnp.array(accuracy_scores))
+
+
+def expected_coverage_probability(sbc_ranks: jnp.ndarray, alpha: float) -> float:
+    """
+    Calculate the Expected Coverage Probability (ECP) for a given value of alpha.
+
+    Args:
+        sbc_ranks: A JAX numpy array containing the SBC ranks.
+        alpha: A float value between 0 and 1.
+
+    Returns:
+        The Expected Coverage Probability (ECP) as a float.
+    """
+    num_simulations = sbc_ranks.shape[0]
+    num_ranks_exceeding_alpha = jnp.sum(sbc_ranks / num_simulations >= alpha)
+    ecp = num_ranks_exceeding_alpha / num_simulations
+    return ecp
+
+

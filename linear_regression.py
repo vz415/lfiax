@@ -83,15 +83,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -102,6 +102,10 @@ class Workspace:
             self.d = jnp.array([])
             self.xi = jnp.array([self.cfg.designs.xi])
             self.d_sim = self.xi # jnp.array([self.cfg.designs.xi])
+        elif self.cfg.designs.xi is None:
+            self.d = jnp.array([self.cfg.designs.d])
+            self.xi = jnp.array([])
+            self.d_sim = self.d
         else:
             self.d = jnp.array([self.cfg.designs.d])
             self.xi = jnp.array([self.cfg.designs.xi])
@@ -174,17 +178,11 @@ class Workspace:
             raise AssertionError("Specified unsupported scheduler.")
 
 
-        # TODO: reduce boilerplate code.
         # @hk.transform_with_state
         @hk.without_apply_rng
         @hk.transform
         def log_prob(x: Array, theta: Array, xi: Array) -> Array:
             '''Up to user to appropriately scale their inputs :).'''
-            # x_scaled = standard_scale(x)
-            # x_mean, x_std = jnp.mean(x), jnp.std(x) + 1e-10
-            # # If this is the wrong shape, grads don't flow :(
-            # if len(x_scaled.shape) > 2:
-            #     x_scaled = x_scaled.squeeze(0)
             # TODO: Pass more nsf parameters from config.yaml
             model = make_nsf(
                 event_shape=self.EVENT_SHAPE,
@@ -334,7 +332,7 @@ class Workspace:
             
             # Calculate the KL-div before updating designs
             exp_like_log_probs = distrax.MultivariateNormalDiag(x_noiseless, noise).log_prob(x)
-            kl_div = jnp.mean(exp_like_log_probs - conditional_lp)
+            kl_div = jnp.mean(conditional_lp - exp_like_log_probs)
             
             # Setting bounds on the designs
             xi_params_max_norm['xi'] = jnp.clip(
@@ -349,6 +347,8 @@ class Workspace:
             # Update d_sim vector for new simulations
             if jnp.size(self.d) == 0:
                 self.d_sim = xi_params['xi']
+            elif jnp.size(self.xi) == 0:
+                self.d_sim =self.d_sim
             else:
                 self.d_sim = jnp.concatenate((self.d, xi_params['xi']), axis=1)
             
@@ -358,7 +358,7 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         
         # ---------------------------------
         # Approximate the posterior by adding log prior and likelihood
