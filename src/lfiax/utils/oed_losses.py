@@ -87,6 +87,7 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     """
     Calculates LF-PCE loss using jax.lax.scan to accelerate.
     """
+    print('start loss')
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
@@ -97,7 +98,12 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
         return jnp.log(result[0])
     
     keys = jrandom.split(prng_key, 1 + M)
-    xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
+    if xi_params is not None:
+        print("here1")
+        xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
+    else:
+        print("here2")
+        xi = None
         
     # simulate the outcomes before finding their log_probs
     # `designs` are combos of previous designs and proposed (non-scaled) designs
@@ -120,7 +126,6 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
 
     # Calculate design penalty
     # design_spread = measure_of_spread(xi_params['xi'])
-    # BUG: Check how this works for scalar values
     # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
 
     # Various loss functions tested
@@ -132,15 +137,18 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)
 
 @partial(jax.jit, static_argnums=[3,5,6])
-def lf_ace_eig_scan(flow_params: hk.Params, xi_params: hk.Params, 
-                     prng_key: PRNGKey, log_prob_fun: Callable, 
-                     designs: Array, N: int=100, M: int=10,):
+def lf_ace_eig_scan(flow_params: hk.Params, post_params: hk.Params, xi_params: hk.Params,
+                     prng_key: PRNGKey, log_prob_fun: Callable, post_sample_fun: Callable,
+                     prior_fun: Callable, designs: Array, N: int=100, M: int=10,):
     """
-    Calculates LF-ACE loss using jax.lax.scan to accelerate.
+    Calculates LF-ACE loss using jax.lax.scan to accelerate. Requires a likelihood
+    estimate, posterior estimate, and a prior. Will use all three to calculate the EIG.
+
     """
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
+
             contrastive_lp = log_prob_fun(flow_params, x, theta, xi)
             contrastive_lps += jnp.exp(contrastive_lp)
             return contrastive_lps, i + 1
@@ -155,23 +163,26 @@ def lf_ace_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
     
     scaled_x = standard_scale(x)
-    # If this is the wrong shape, grads don't flow :(
     
+    # If this is the wrong shape, grads don't flow :(
     if xi_params['xi'].shape[-1] == 1:
         scaled_x = scaled_x.squeeze(0)
+
     conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
     conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
         keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
         ) - jnp.log(M+1)
     
+    # TODO: Put this in a scan_fun and loop M times
+    # Sample M times from q(theta | y_d, d) for each y
+    post_samples = post_sample_fun(post_params, scaled_x)
+    prior_log_probs = prior_fun.log_prob(post_samples)
+    likelihood_lp = log_prob_fun(flow_params, scaled_x, post_samples, xi)
+    
+    
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
-
-    # Calculate design penalty
-    # design_spread = measure_of_spread(xi_params['xi'])
-    # BUG: Check how this works for scalar values
-    # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
 
     # Various loss functions tested
     # loss = EIG

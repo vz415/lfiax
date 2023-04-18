@@ -18,8 +18,10 @@ from typing import (
     Optional,
     Tuple,
 )
+
 Array = jnp.ndarray
 Batch = Mapping[str, np.ndarray]
+PRNGKey = Array
 
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""
@@ -31,6 +33,23 @@ def jax_lexpand(A, *dimensions):
     A = jnp.broadcast_to(A, shape)
     return A
 
+def sir_update(log_likelihood_fn, prior_samples, prior_log_probs, prng_key, 
+               likelihood_params, x_obs, xi):
+    log_likelihoods = log_likelihood_fn.apply(likelihood_params, x_obs, prior_samples, xi)
+    
+    # Update the importance weights
+    new_log_weights = prior_log_probs + log_likelihoods
+    
+    # Normalize the weights
+    max_log_weight = jnp.max(new_log_weights)
+    log_weights_shifted = new_log_weights - max_log_weight
+    unnormalized_weights = jnp.exp(log_weights_shifted)
+    
+    # Resample with the updated weights
+    posterior_weights = unnormalized_weights / jnp.sum(unnormalized_weights)
+    posterior_samples = jrandom.choice(prng_key, prior_samples, shape=(len(prior_samples),), replace=True, p=posterior_weights)
+    
+    return posterior_samples, posterior_weights
 
 def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     """Helper function for loading and preparing tfds splits."""

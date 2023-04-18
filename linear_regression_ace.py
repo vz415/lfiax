@@ -239,7 +239,7 @@ class Workspace:
         @hk.without_apply_rng
         @hk.transform
         def vi_posterior_sample(key: PRNGKey, num_samples: int,
-                        y: Array, shift: Array, scale: Array) -> Array:
+                        shift: Array, scale: Array) -> Array:
             # TODO: add conditional observed data.
             """vi is sampling the posterior distributuion so doesn't need
             conditional information. Just uses distrax bijector layers.
@@ -253,10 +253,8 @@ class Workspace:
                 use_resnet=True,
                 conditional=True
             )
-            # TODO: Make sure sampling can be conditional.
             samples = model._sample_n(key=key, 
                                     n=[num_samples],
-                                    y
                                     )
             return inverse_standard_scale(samples, shift, scale)
         
