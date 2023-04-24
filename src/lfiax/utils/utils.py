@@ -33,6 +33,7 @@ def jax_lexpand(A, *dimensions):
     A = jnp.broadcast_to(A, shape)
     return A
 
+
 def sir_update(log_likelihood_fn, prior_samples, prior_log_probs, prng_key, 
                likelihood_params, x_obs, xi):
     log_likelihoods = log_likelihood_fn.apply(likelihood_params, x_obs, prior_samples, xi)
@@ -50,6 +51,7 @@ def sir_update(log_likelihood_fn, prior_samples, prior_log_probs, prng_key,
     posterior_samples = jrandom.choice(prng_key, prior_samples, shape=(len(prior_samples),), replace=True, p=posterior_weights)
     
     return posterior_samples, posterior_weights
+
 
 def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     """Helper function for loading and preparing tfds splits."""

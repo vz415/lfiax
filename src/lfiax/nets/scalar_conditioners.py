@@ -60,13 +60,10 @@ def conditional_scalar_conditioner_mlp(
                 # TODO: implement BatchNorm by creating stateful function
                 # theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
-            if xi is not None:
-                print("using xi")
-                xi = hk.Flatten()(xi)
-                z = jnp.concatenate((theta, xi), axis=1)
-            else:
-                print("using theta")
-                z = theta
+            x = hk.Flatten()(x)
+            
+            xi = hk.Flatten()(xi)
+            z = jnp.concatenate((x, theta, xi), axis=1)
 
             if resnet:
                 for i, hidden in enumerate(hidden_sizes):

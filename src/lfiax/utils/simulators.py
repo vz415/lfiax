@@ -235,7 +235,7 @@ def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
 
 def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
     """
-    Returns data in a format suitable for normalizing flow trainin using
+    Returns data in a format suitable for normalizing flow training using
     TF datasets.
     Data will be in shape [y, thetas]. The `y` variable can vary in size.
     """

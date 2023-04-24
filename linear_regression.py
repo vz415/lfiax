@@ -83,34 +83,45 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
         self.seed = self.cfg.seed
+        rng = jrandom.PRNGKey(self.seed)
         
-        if self.cfg.designs.d is None:
-            self.d = jnp.array([])
-            self.xi = jnp.array([self.cfg.designs.xi])
-            self.d_sim = self.xi # jnp.array([self.cfg.designs.xi])
-        elif self.cfg.designs.xi is None:
-            self.d = jnp.array([self.cfg.designs.d])
-            self.xi = jnp.array([])
-            self.d_sim = self.d
+        if self.cfg.designs.num_xi is not None:
+            if self.cfg.designs.d is None:
+                self.d = jnp.array([])
+                self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=-10, maxval=10)
+                self.d_sim = self.xi
+            else:
+                self.d = jnp.array([self.cfg.designs.d])
+                self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=-10, maxval=10)
+                self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
         else:
-            self.d = jnp.array([self.cfg.designs.d])
-            self.xi = jnp.array([self.cfg.designs.xi])
-            self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
-
+            if self.cfg.designs.d is None:
+                self.d = jnp.array([])
+                self.xi = jnp.array([self.cfg.designs.xi])
+                self.d_sim = self.xi
+            elif self.cfg.designs.xi is None:
+                self.d = jnp.array([self.cfg.designs.d])
+                self.xi = jnp.array([])
+                self.d_sim = self.d
+            else:
+                self.d = jnp.array([self.cfg.designs.d])
+                self.xi = jnp.array([self.cfg.designs.xi])
+                self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
+        
         # Bunch of event shapes needed for various functions
         len_xi = self.xi.shape[-1]
         self.xi_shape = (len_xi,)
@@ -236,32 +247,32 @@ class Workspace:
                                     )
             return inverse_standard_scale(samples, shift, scale)
         
-        @hk.without_apply_rng
-        @hk.transform
-        def vi_posterior_sample(key: PRNGKey, num_samples: int,
-                        y: Array, shift: Array, scale: Array) -> Array:
-            # TODO: add conditional observed data.
-            """vi is sampling the posterior distributuion so doesn't need
-            conditional information. Just uses distrax bijector layers.
-            """
-            model = make_nsf(
-                event_shape=self.theta_shape,
-                num_layers=vi_flow_num_layers,
-                hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
-                num_bins=vi_num_bins,
-                standardize_theta=False,
-                use_resnet=True,
-                conditional=True
-            )
-            # TODO: Make sure sampling can be conditional.
-            samples = model._sample_n(key=key, 
-                                    n=[num_samples],
-                                    y
-                                    )
-            return inverse_standard_scale(samples, shift, scale)
+        # @hk.without_apply_rng
+        # @hk.transform
+        # def vi_posterior_sample(key: PRNGKey, num_samples: int,
+        #                 y: Array, shift: Array, scale: Array) -> Array:
+        #     # TODO: add conditional observed data.
+        #     """vi is sampling the posterior distributuion so doesn't need
+        #     conditional information. Just uses distrax bijector layers.
+        #     """
+        #     model = make_nsf(
+        #         event_shape=self.theta_shape,
+        #         num_layers=vi_flow_num_layers,
+        #         hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
+        #         num_bins=vi_num_bins,
+        #         standardize_theta=False,
+        #         use_resnet=True,
+        #         conditional=True
+        #     )
+        #     # TODO: Make sure sampling can be conditional.
+        #     samples = model._sample_n(key=key, 
+        #                             n=[num_samples],
+        #                             y
+        #                             )
+        #     return inverse_standard_scale(samples, shift, scale)
         
         self.likelihood_sample = likelihood_sample
-        self.vi_posterior_sample = vi_posterior_sample
+        # self.vi_posterior_sample = vi_posterior_sample
 
     def run(self) -> Callable:
         tic = time.time()
@@ -359,7 +370,7 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         
         # ---------------------------------
         # Approximate the posterior by adding log prior and likelihood

@@ -87,23 +87,36 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     """
     Calculates LF-PCE loss using jax.lax.scan to accelerate.
     """
-    print('start loss')
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
             contrastive_lp = log_prob_fun(flow_params, x, theta, xi)
-            contrastive_lps += jnp.exp(contrastive_lp)
-            return contrastive_lps, i + 1
+            return jnp.logaddexp(contrastive_lps, contrastive_lp), i + 1
+
         result = jax.lax.scan(scan_fun, conditional_lp, jnp.array(range(M)))
-        return jnp.log(result[0])
+        return result[0] #- jnp.log(M + 1)
+
+    # TODO: Make gpu version 
+    # def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
+    #     # Generate M * N new prior values
+    #     theta_keys = jrandom.split(keys[0], M * N)
+    #     theta_values, _ = jax.vmap(sim_linear_prior, in_axes=(None, 0))(N, theta_keys)
+
+    #     # Calculate log_prob_fun for each theta value
+    #     log_probs = jax.vmap(log_prob_fun, in_axes=(None, None, 0, None))(flow_params, x, theta_values, xi)
+
+    #     # Concatenate conditional_lp with log_probs
+    #     all_log_probs = jnp.concatenate([conditional_lp[jnp.newaxis, :], log_probs], axis=0)
+
+    #     # Compute the marginal log probability using jnp.logsumexp
+    #     marginal_lp = jax.scipy.special.logsumexp(all_log_probs, axis=0)# - jnp.log(M * N + 1)
+
+    #     return marginal_lp
+
     
     keys = jrandom.split(prng_key, 1 + M)
-    if xi_params is not None:
-        print("here1")
-        xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
-    else:
-        print("here2")
-        xi = None
+    
+    xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
         
     # simulate the outcomes before finding their log_probs
     # `designs` are combos of previous designs and proposed (non-scaled) designs
@@ -116,10 +129,10 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
         scaled_x = scaled_x.squeeze(0)
         
     conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
-    conditional_lp_exp = jnp.exp(conditional_lp)
+    # conditional_lp_exp = jnp.exp(conditional_lp)
     marginal_lp = compute_marginal_lp(
-        keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
-        ) - jnp.log(M+1)
+        keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp
+        ) - jnp.log(M + 1)
     
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
@@ -132,6 +145,7 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params,
     # loss = EIG
     # loss = 0.01 * design_spread + EIG
     # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
+    # loss = jnp.mean(conditional_lp)
     loss = EIG + jnp.mean(conditional_lp)
     
     return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)
@@ -143,12 +157,10 @@ def lf_ace_eig_scan(flow_params: hk.Params, post_params: hk.Params, xi_params: h
     """
     Calculates LF-ACE loss using jax.lax.scan to accelerate. Requires a likelihood
     estimate, posterior estimate, and a prior. Will use all three to calculate the EIG.
-
     """
     def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
         def scan_fun(contrastive_lps, i):
             theta, _ = sim_linear_prior(N, keys[i + 1])
-
             contrastive_lp = log_prob_fun(flow_params, x, theta, xi)
             contrastive_lps += jnp.exp(contrastive_lp)
             return contrastive_lps, i + 1
@@ -180,6 +192,96 @@ def lf_ace_eig_scan(flow_params: hk.Params, post_params: hk.Params, xi_params: h
     prior_log_probs = prior_fun.log_prob(post_samples)
     likelihood_lp = log_prob_fun(flow_params, scaled_x, post_samples, xi)
     
+    # EIG = jnp.sum(conditional_lp - marginal_lp)
+    EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
+
+    # Various loss functions tested
+    # loss = EIG
+    # loss = 0.01 * design_spread + EIG
+    # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
+    loss = EIG + jnp.mean(conditional_lp)
+    
+    return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG)
+
+
+@partial(jax.jit, static_argnums=[4, 5, 6, 7, 9, 10])
+def snpe_c(flow_params: hk.Params, post_params: hk.Params, xi_params: hk.Params,
+                     prng_key: PRNGKey, log_prob_fun: Callable, post_log_prob_fun: Callable, 
+                     post_sample_fun: Callable, prior_fun: Callable, designs: Array, 
+                     N: int=100, M: int=10,):
+    """
+    Calculates snpe-c using a posterior and prior. Requires a posterior and prior
+    estimate. Will use all three to calculate the EIG. This takes a vectorized
+    approach for readability and GPU compatability.
+    """
+    keys = jrandom.split(prng_key, 1 + M)
+    xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
+
+    # Sample theta_0
+    # Oh man, to sample from a flow, need to 
+    # TODO: add x_prev as an input that's the previous data point to see
+    post_sample_fun(post_params, x_prev)
+        
+    # simulate the outcomes before finding their log_probs
+    # `designs` are combos of previous designs and proposed (non-scaled) designs
+    x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
+    
+    scaled_x = standard_scale(x)
+    
+    # If this is the wrong shape, grads don't flow :(
+    if xi_params['xi'].shape[-1] == 1:
+        scaled_x = scaled_x.squeeze(0)
+
+    # simulate the outcomes before finding their log_probs
+    x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
+    
+    scaled_x = standard_scale(x)
+
+    # If this is the wrong shape, grads don't flow :(
+    if xi_params['xi'].shape[-1] == 1:
+        scaled_x = scaled_x.squeeze(0)
+
+    conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
+    # conditional_lp_exp = jnp.exp(conditional_lp)
+    # marginal_lp = compute_marginal_lp(
+    #     keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
+    #     ) - jnp.log(M+1)
+
+    # TODO: Make function that returns M x num_samples priors
+    thetas, log_probs = sim_linear_prior_M_samples(num_samples=num_samples, M=M, key=keys[1])
+    
+    # conditional_lp could be the initial starting state that is added upon... 
+    contrastive_lps = jax.vmap(lambda theta: log_prob.apply(params, x, theta, xi_broadcast))(thetas)
+    marginal_log_prbs = jnp.concatenate((jax_lexpand(conditional_lp, 1), jnp.array(contrastive_lps)))
+    marginal_lp = jax.nn.logsumexp(marginal_log_prbs, 0) - math.log(M + 1)
+    # marginal_lp = compute_marginal_lp3(M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp)
+
+    return - sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
+
+    keys = jrandom.split(prng_key, 1 + M)
+    xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
+        
+    # simulate the outcomes before finding their log_probs
+    # `designs` are combos of previous designs and proposed (non-scaled) designs
+    x, theta_0, x_noiseless, noise = sim_linear_data_vmap(designs, N, keys[0])
+    
+    scaled_x = standard_scale(x)
+    
+    # If this is the wrong shape, grads don't flow :(
+    if xi_params['xi'].shape[-1] == 1:
+        scaled_x = scaled_x.squeeze(0)
+
+    conditional_lp = log_prob_fun(flow_params, scaled_x, theta_0, xi)
+    conditional_lp_exp = jnp.exp(conditional_lp)
+    marginal_lp = compute_marginal_lp(
+        keys[1:M+1], log_prob_fun, M, N, scaled_x, conditional_lp_exp
+        ) - jnp.log(M+1)
+    
+    # TODO: Put this in a scan_fun and loop M times
+    # Sample M times from q(theta | y_d, d) for each y
+    post_samples = post_sample_fun(post_params, scaled_x)
+    prior_log_probs = prior_fun.log_prob(post_samples)
+    likelihood_lp = log_prob_fun(flow_params, scaled_x, post_samples, xi)
     
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
