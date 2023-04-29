@@ -24,7 +24,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from lfiax.flows.nsf import make_nsf
-from lfiax.utils.oed_losses import lf_pce_eig_scan
+from lfiax.utils.oed_losses import lf_pce_eig_scan_lin_reg
 from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
 # from lfiax.utils.utils import jax_lexpand
 
@@ -83,15 +83,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -288,13 +288,13 @@ class Workspace:
                 params, x, theta, xi)
             
             (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)), grads = jax.value_and_grad(
-                lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
+                lf_pce_eig_scan_lin_reg, argnums=[0,1], has_aux=True)(
                 flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-
+            
             new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
             
@@ -315,7 +315,7 @@ class Workspace:
         if self.xi_optimizer == "Adam":
             optimizer2 = optax.adam(learning_rate=self.schedule)
         elif self.xi_optimizer == "SGD":
-            optimizer2 = optax.sgd(learning_rate=self.schedule)
+            optimizer2 = optax.sgd(learning_rate=self.schedule, momentum=0.9)
         
         # This could be initialized by a distribution of designs!
         params['xi'] = self.xi
@@ -332,7 +332,7 @@ class Workspace:
 
         opt_state_xi = optimizer2.init(xi_params_max_norm)
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
-
+        
         for step in range(self.training_steps):
             flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std = update_pce(
                 flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
@@ -370,7 +370,7 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         
         # ---------------------------------
         # Approximate the posterior by adding log prior and likelihood
