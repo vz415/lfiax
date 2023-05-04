@@ -8,7 +8,7 @@
 #SBATCH --nodes=1                        ## number of nodes the job will use
 #SBATCH --ntasks=1                       ## number of processes to launch for each array iteration
 #SBATCH --cpus-per-task=1                ## number of cores the job needs
-#SBATCH --mem=4G
+#SBATCH --mem-per-cpu=18G
 #SBATCH --time=30:00:00                   ## time limit for each array task
 #SBATCH --array=1-10                      ## number of array tasks
 #SBATCH --mail-type=fail,end
