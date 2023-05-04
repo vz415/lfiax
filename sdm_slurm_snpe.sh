@@ -23,7 +23,7 @@ export LD_LIBRARY_PATH=/data/homezvol1/vzaballa/.conda/envs/lfiax/lib/
 
 ## Run the script
 # python examples/linear_regression.py -m # ++seed=$SLURM_ARRAY_TASK_ID ++contrastive_sampling.M=10,11
-python linear_regression.py ++seed=$SLURM_ARRAY_TASK_ID
+python linear_regression_snpe.py ++seed=$SLURM_ARRAY_TASK_ID
 
 #python sbiDOEMAN/main_bma.py ++seed=$SLURM_ARRAY_TASK_ID ++num_design_rounds=5 ++BMP.model='onestep'
 #python sbiDOEMAN/main_random.py ++seed=$SLURM_ARRAY_TASK_ID ++SDM.random=True ++num_design_rounds=5 ++BMP.model="onestep"
