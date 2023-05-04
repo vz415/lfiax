@@ -96,6 +96,12 @@ class Workspace:
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
+        current_time = time.localtime()
+        current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
+        
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'pce_lin_reg', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        os.makedirs(self.subdir, exist_ok=True)
+
         self.seed = self.cfg.seed
         rng = jrandom.PRNGKey(self.seed)
         
@@ -206,23 +212,7 @@ class Workspace:
             )
             return model.log_prob(x, theta, xi)
         
-        @hk.without_apply_rng
-        @hk.transform
-        def vi_posterior_log_prob(theta: Array) -> Array:
-            theta_scaled = standard_scale(theta)
-            model = make_nsf(
-                event_shape=self.theta_shape,
-                num_layers=vi_flow_num_layers,
-                hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
-                num_bins=vi_num_bins,
-                standardize_theta=False,
-                use_resnet=True,
-                conditional=True
-            )
-            return model.log_prob(theta_scaled)
-
         self.log_prob = log_prob
-        self.vi_posterior_log_prob = vi_posterior_log_prob
 
         @hk.without_apply_rng
         @hk.transform
@@ -246,35 +236,9 @@ class Workspace:
                                     n=[num_samples]
                                     )
             return inverse_standard_scale(samples, shift, scale)
-        
-        # @hk.without_apply_rng
-        # @hk.transform
-        # def vi_posterior_sample(key: PRNGKey, num_samples: int,
-        #                 y: Array, shift: Array, scale: Array) -> Array:
-        #     # TODO: add conditional observed data.
-        #     """vi is sampling the posterior distributuion so doesn't need
-        #     conditional information. Just uses distrax bijector layers.
-        #     """
-        #     model = make_nsf(
-        #         event_shape=self.theta_shape,
-        #         num_layers=vi_flow_num_layers,
-        #         hidden_sizes=[vi_hidden_size] * vi_mlp_num_layers,
-        #         num_bins=vi_num_bins,
-        #         standardize_theta=False,
-        #         use_resnet=True,
-        #         conditional=True
-        #     )
-        #     # TODO: Make sure sampling can be conditional.
-        #     samples = model._sample_n(key=key, 
-        #                             n=[num_samples],
-        #                             y
-        #                             )
-        #     return inverse_standard_scale(samples, shift, scale)
-        
-        self.likelihood_sample = likelihood_sample
-        # self.vi_posterior_sample = vi_posterior_sample
 
     def run(self) -> Callable:
+        logf, writer = self._init_logging()
         tic = time.time()
         
         @partial(jax.jit, static_argnums=[5,6])
@@ -371,99 +335,28 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; \
                   Run time: {run_time}")
+            
+            writer.writerow({
+                'STEP': step, 
+                'd_sim': self.d_sim,
+                'Xi': xi_params['xi'],
+                'Loss': loss,
+                'EIG': EIG,
+                'time':float(run_time)
+            })
+            logf.flush()
 
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
-        
-        # ---------------------------------
-        # Approximate the posterior by adding log prior and likelihood
-        # prior = make_lin_reg_prior()
-
-        # # Evaluate the log-prior for all prior samples
-        # prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(1_000))
-
-        # true_theta = jnp.array([[2,5]])
-
-        # # Simulate real data using true simulator and noise
-        # x_obs, _, _ = sim_linear_data_vmap_theta(self.d_sim, true_theta, next(prng_seq))
-
-        # xi_test = jnp.broadcast_to(
-        #     xi_params['xi'], (len(prior_samples), xi_params['xi'].shape[-1]))
-
-        # x_obs_test = jnp.broadcast_to(
-        #     x_obs.squeeze(0), (len(prior_samples), x_obs.shape[-1]))
-        
-        # # Getting the posterior by adding the log_probs fo likelihood and prior
-        # liklelihoods = self.log_prob.apply(flow_params, x_obs_test, prior_samples, xi_test)
-        
-
-        # # ---------------------------------
-        # # Approximate the posterior using VI
-        # prior = make_lin_reg_prior()
-
-        # # Evaluate the log-prior for all prior samples
-        # prior_samples, prior_log_prob = prior.sample_and_log_prob(seed=next(prng_seq), sample_shape=(self.vi_samples))
-        
-        # xi = jnp.broadcast_to(xi_params['xi'], (self.vi_samples, xi_params['xi'].shape[-1]))
-        
-        # # Simulate data using the prior
-        # x, prior_samples, _, _ = sim_linear_data_vmap(self.d_sim, self.vi_samples, next(prng_seq))
-        # # TODO: Figure out prior_samples shape and simulate the correct response
-        # log_likelihoods = self.log_prob.apply(flow_params, x, prior_samples, xi)
-
-        # vi_params = self.vi_log_prob.init(
-        #     next(prng_seq),
-        #     np.zeros((1, *self.theta_shape)),
-        # )
-
-        # vi_optimizer = optax.adam(self.learning_rate)
-
-        # @jax.jit
-        # def vi_objective(vi_params, prior_samples, likelihood_log_probs, prior_log_probs):
-        #     log_q = self.vi_log_prob.apply(vi_params, prior_samples)
-        #     log_joint = likelihood_log_probs + prior_log_probs
-        #     return -jnp.mean(log_joint - log_q)
-
-        # @jax.jit
-        # def vi_update(params: hk.Params,
-        #               opt_state: OptState,
-        #               prior_samples,
-        #               likelihood_log_probs,
-        #               prior_log_probs,
-        #               ) -> Tuple[hk.Params, OptState]:
-        #     """Single SGD update step of the VI posterior."""
-        #     grads = jax.grad(vi_objective)(
-        #         vi_params, prior_samples, likelihood_log_probs, prior_log_probs)
-        #     updates, new_opt_state = vi_optimizer.update(grads, opt_state)
-        #     new_params = optax.apply_updates(params, updates)
-        #     return new_params, new_opt_state
-        
-        # vi_opt_state = vi_optimizer.init(vi_params)
-
-        # for i in range(10):
-        #     vi_params, vi_opt_state = vi_update(
-        #         vi_params, vi_opt_state, prior_samples, log_likelihoods, prior_log_prob)
-
-        # # Sample from the optimized variational family to approximate the posterior
-        # # TODO: Implement sample function to use for evaluation metrics
-        # shift = jnp.mean(prior_samples)
-        # scale = jnp.std(prior_samples)
-        # posterior_samples = self.vi_sample.apply(
-        #     vi_params, next(prng_seq), num_samples=1000, shift=shift, scale=scale
-        #     )
-        
-        # # ------------------------------
-        # # Posterior checks
-        # # 1. PPC check
-        # # 1a. Generate samples x_pp and compare with x_o.
-        # # Simulate data using posterior samples - invalid if no previous designs seen.
-        # # TODO: Make simulator function that just takes d, x, and theta - not random.
-        # x_pp, _, _ = sim_linear_data_vmap_theta(self.d_sim, posterior_samples, next(prng_seq))
-        # 1b. Plot.
-
-
-        # 2. SBC check
-
-
+    
+    def _init_logging(self):
+        path = os.path.join(self.subdir, 'log.csv')
+        logf = open(path, 'a') 
+        fieldnames = ['STEP', 'd_sim', 'Xi', 'Loss', 'EIG', 'time']
+        writer = csv.DictWriter(logf, fieldnames=fieldnames)
+        if os.stat(path).st_size == 0:
+            writer.writeheader()
+            logf.flush()
+        return logf, writer
 
 
 from linear_regression import Workspace as W

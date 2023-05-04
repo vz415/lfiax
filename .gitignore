@@ -152,9 +152,13 @@ dmypy.json
 
 # wandb
 *wandb/
+*examples/wandb/
 
 # logs
 *logs/
 
 # errors
 *errors/
+
+# neurips data
+*neurips/

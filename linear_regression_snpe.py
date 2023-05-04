@@ -95,6 +95,12 @@ class Workspace:
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
+        current_time = time.localtime()
+        current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
+        
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'snpe_pce_lin_reg', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        os.makedirs(self.subdir, exist_ok=True)
+
         self.seed = self.cfg.seed
         rng = jrandom.PRNGKey(self.seed)
         keys = jrandom.split(rng)
@@ -215,6 +221,8 @@ class Workspace:
         self.post_log_prob = posterior_log_prob
 
     def run(self) -> Callable:
+        logf, writer = self._init_logging()
+
         @partial(jax.jit, static_argnums=[5,8,9])
         def update_snpe_pce(
             post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
@@ -278,7 +286,6 @@ class Workspace:
             tic = time.time()
             # get priors and simulate a data point
             theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,))
-            # breakpoint()
             x, _, _  = sim_linear_data_vmap_theta(self.d_sim, theta_0, next(prng_seq))
             
             scaled_x = standard_scale(x)
@@ -321,8 +328,27 @@ class Workspace:
             Xi Updates: {xi_updates['xi']}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
             Simulate Time: {simulate_time:.5f}")
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            writer.writerow({
+                'STEP': step, 
+                'd_sim': self.d_sim,
+                'Xi': xi_params['xi'],
+                'Loss': loss,
+                'EIG': EIG,
+                'inference_time':float(inference_time)
+            })
+            logf.flush()
 
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+    
+    def _init_logging(self):
+        path = os.path.join(self.subdir, 'log.csv')
+        logf = open(path, 'a') 
+        fieldnames = ['STEP', 'd_sim', 'Xi', 'Loss', 'EIG', 'inference_time']
+        writer = csv.DictWriter(logf, fieldnames=fieldnames)
+        if os.stat(path).st_size == 0:
+            writer.writeheader()
+            logf.flush()
+        return logf, writer
 
 from linear_regression_snpe import Workspace as W
 
