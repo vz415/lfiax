@@ -29,6 +29,7 @@ def scalar_conditioner_mlp(
                         x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
             else:
                 x = hk.nets.MLP(hidden_sizes, activate_final=True)(x)
+            
             x = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
                 w_init=jnp.zeros,
@@ -61,7 +62,7 @@ def conditional_scalar_conditioner_mlp(
                 # theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
             x = hk.Flatten()(x)
-            
+            # breakpoint()
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((x, theta, xi), axis=1)
 

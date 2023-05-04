@@ -276,7 +276,7 @@ class Workspace:
 
     def run(self) -> Callable:
         tic = time.time()
-
+        
         @partial(jax.jit, static_argnums=[5,6])
         def update_pce(
             flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
@@ -334,6 +334,7 @@ class Workspace:
         flow_params = {key: value for key, value in params.items() if key != 'xi'}
         
         for step in range(self.training_steps):
+            tic = time.time()
             flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std = update_pce(
                 flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
             )
@@ -368,7 +369,8 @@ class Workspace:
 
             # Saving contents to file
             print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
-            Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}")
+            Xi Updates: {xi_updates['xi']}; Loss: {loss}; EIG: {EIG}; KL Div: {kl_div}; \
+                  Run time: {run_time}")
 
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
         

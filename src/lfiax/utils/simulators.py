@@ -222,6 +222,8 @@ def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
     if d.shape[-1] == 1:
         # "d" becomes (2, 1) shape whenever passing lists.
         y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0))
+        # BUG: I'm not sure why this sometimes works and sometimes does not.
+        # y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), d.T)
     else:
         # Designs are a length-2 arrays.
         y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0)).squeeze()

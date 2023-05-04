@@ -24,11 +24,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from lfiax.flows.nsf import make_nsf
-from lfiax.utils.oed_losses import lf_pce_eig_scan
-from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
-# from lfiax.utils.utils import jax_lexpand
-
-from sbidoeman.simulator import bmp_simulator
+from lfiax.utils.oed_losses import snpe_c
+from lfiax.utils.simulators import sim_linear_data_vmap_theta
 
 from typing import (
     Any,
@@ -45,14 +42,17 @@ Batch = Mapping[str, np.ndarray]
 OptState = Any
 
 
-def make_bmp_prior():
-    low = jnp.log(1e-6)
-    high = jnp.log(1.0)
+# TODO: Make prior outside of the simulator so you can sample and pass it around
+def make_lin_reg_prior():
+    theta_shape = (2,)
 
-    uniform = distrax.Uniform(low=jnp.array([0.0]), high=jnp.array([1.0]))
-    log_uniform = distrax.Transformed(
-        uniform, bijector=distrax.Lambda(lambda x: jnp.exp(x * (high - low) + low)))
-    return log_uniform
+    mu = jnp.zeros(theta_shape)
+    sigma = (3**2) * jnp.ones(theta_shape)
+
+    prior = distrax.Independent(
+        distrax.MultivariateNormalDiag(mu, sigma)
+    )
+    return prior
 
 
 @jax.jit
@@ -82,15 +82,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -98,7 +98,7 @@ class Workspace:
         self.seed = self.cfg.seed
         rng = jrandom.PRNGKey(self.seed)
         keys = jrandom.split(rng)
-
+        
         if self.cfg.designs.num_xi is not None:
             if self.cfg.designs.d is None:
                 self.d = jnp.array([])
@@ -111,7 +111,7 @@ class Workspace:
 
                 self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
                 # self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=1e-6, maxval=1e6)
-                
+                self.xi = self.xi.squeeze()
                 self.d_sim = self.xi
             else:
                 self.d = jnp.array([self.cfg.designs.d])
@@ -130,7 +130,7 @@ class Workspace:
                 self.d = jnp.array([self.cfg.designs.d])
                 self.xi = jnp.array([self.cfg.designs.xi])
                 self.d_sim = jnp.concatenate((self.d, self.xi), axis=1)
-        
+
         # Bunch of event shapes needed for various functions
         len_xi = self.xi.shape[-1]
         self.xi_shape = (len_xi,)
@@ -147,6 +147,13 @@ class Workspace:
         mlp_num_layers = self.cfg.flow_params.mlp_num_layers
         hidden_size = self.cfg.flow_params.mlp_hidden_size
         num_bins = self.cfg.flow_params.num_bins
+
+        # vi flow's parameters
+        vi_flow_num_layers = self.cfg.vi_flow_params.num_layers
+        vi_mlp_num_layers = self.cfg.vi_flow_params.mlp_num_layers
+        vi_hidden_size = self.cfg.vi_flow_params.mlp_hidden_size
+        vi_num_bins = self.cfg.vi_flow_params.num_bins
+        self.vi_samples = self.cfg.vi_flow_params.vi_samples
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
@@ -189,16 +196,13 @@ class Workspace:
                 lr_values, decay_steps, restarts, alpha=self.xi_lr_end)
         else:
             raise AssertionError("Specified unsupported scheduler.")
-
-
-        # @hk.transform_with_state
+        
         @hk.without_apply_rng
         @hk.transform
-        def log_prob(x: Array, theta: Array, xi: Array) -> Array:
-            '''Up to user to appropriately scale their inputs :).'''
-            # TODO: Pass more nsf parameters from config.yaml
+        def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:
+            theta_scaled = standard_scale(theta)
             model = make_nsf(
-                event_shape=self.EVENT_SHAPE,
+                event_shape=self.theta_shape,
                 num_layers=flow_num_layers,
                 hidden_sizes=[hidden_size] * mlp_num_layers,
                 num_bins=num_bins,
@@ -206,71 +210,59 @@ class Workspace:
                 use_resnet=True,
                 conditional=True
             )
-            return model.log_prob(x, theta, xi)
+            return model.log_prob(theta_scaled, x, xi)
 
-        self.log_prob = log_prob
-
-        # Simulator (BMP onestep model) to use
-        model_size = (1,1,1)
-        fixed_receptor = True
-        self.simulator = partial(
-            bmp_simulator, 
-            model_size=model_size,
-            model='onestep', 
-            fixed_receptor=fixed_receptor)
-        
+        self.post_log_prob = posterior_log_prob
 
     def run(self) -> Callable:
-        # tic = time.time()
-
-        @partial(jax.jit, static_argnums=[5,7,8])
-        def update_pce(
-            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
-            opt_state: OptState, opt_state_xi: OptState, prior: Callable, \
-            scaled_x: Array,  N: int, M: int, theta_0: Array,
+        @partial(jax.jit, static_argnums=[5,8,9])
+        def update_snpe_pce(
+            post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
+            opt_state: OptState, opt_state_xi: OptState, prior: Callable, 
+            scaled_x: Array, theta_0: Array, N: int, M: int, 
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
-            log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
+            post_log_prob_fun = lambda params, x, theta, xi: self.post_log_prob.apply(
                 params, x, theta, xi)
             
             (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
-                lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, prior, scaled_x, theta_0,
-                log_prob_fun, N=N, M=M
+                snpe_c, argnums=[0,1], has_aux=True)(
+                post_params, xi_params, prng_key, prior, scaled_x, theta_0,
+                post_log_prob_fun, N=N, M=M
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-            
-            new_params = optax.apply_updates(flow_params, updates)
+
+            new_params = optax.apply_updates(post_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
             
             return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, EIG
         
         # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
-        params = self.log_prob.init(
+        post_params = self.post_log_prob.init(
             next(prng_seq),
-            np.zeros((1, *self.EVENT_SHAPE)),
             np.zeros((1, *self.theta_shape)),
+            np.zeros((1, *self.EVENT_SHAPE)),
             np.zeros((1, *self.xi_shape)),
         )
 
         optimizer = optax.adam(self.learning_rate)
-        opt_state = optimizer.init(params)
+        opt_state = optimizer.init(post_params)
 
         if self.xi_optimizer == "Adam":
             optimizer2 = optax.adam(learning_rate=self.schedule)
         elif self.xi_optimizer == "SGD":
-            optimizer2 = optax.sgd(learning_rate=self.schedule, momentum=0.9)
+            optimizer2 = optax.sgd(learning_rate=self.schedule)
         
         # This could be initialized by a distribution of designs!
-        params['xi'] = self.xi
-        xi_params = {key: value for key, value in params.items() if key == 'xi'}
+        post_params['xi'] = self.xi
+        xi_params = {key: value for key, value in post_params.items() if key == 'xi'}
         
         # Normalize xi values for optimizer
-        design_min = 1e-6
-        design_max = 1e4
+        design_min = -10.
+        design_max = 10.
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
         xi_params_max_norm = {}
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
@@ -278,21 +270,24 @@ class Workspace:
         # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / (jnp.std(xi_params['xi']) + 1e-10)
 
         opt_state_xi = optimizer2.init(xi_params_max_norm)
-        flow_params = {key: value for key, value in params.items() if key != 'xi'}
+        post_params = {key: value for key, value in post_params.items() if key != 'xi'}
 
-        priors = make_bmp_prior()
+        priors = make_lin_reg_prior()
         
         for step in range(self.training_steps):
             tic = time.time()
             # get priors and simulate a data point
-            theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,2))
-            x  = self.simulator(self.d_sim, theta_0.squeeze())
+            theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,))
+            # breakpoint()
+            x, _, _  = sim_linear_data_vmap_theta(self.d_sim, theta_0, next(prng_seq))
+            
             scaled_x = standard_scale(x)
             x_mean, x_std = jnp.mean(x), jnp.std(x) + 1e-10
             simulate_time = time.time() - tic
             tic = time.time()
-            flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_pce(
-                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, N=self.N, M=self.M, theta_0=theta_0.squeeze()
+
+            post_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_snpe_pce(
+                post_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, theta_0=theta_0.squeeze(), N=self.N, M=self.M
             )
             
             if jnp.any(jnp.isnan(xi_grads['xi'])):
@@ -302,7 +297,7 @@ class Workspace:
             # Setting bounds on the designs
             xi_params_max_norm['xi'] = jnp.clip(
                 xi_params_max_norm['xi'], 
-                a_min=jnp.divide(design_min, scale_factor), # This could get small...
+                a_min=jnp.divide(design_min, scale_factor), 
                 a_max=jnp.divide(design_max, scale_factor)
                 )
             
@@ -320,19 +315,22 @@ class Workspace:
             inference_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; d_sim: {float(self.d_sim):.5f}; Xi: {float(xi_params['xi']):.5f}; \
-            Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
-            simulate time: {simulate_time:.5f}")
-            
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
-        
+            # print(f"STEP: {step:5d}; d_sim: {float(self.d_sim):.5f}; Xi: {float(xi_params['xi']):.5f}; \
+            # Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
+            print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
+            Xi Updates: {xi_updates['xi']}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
+            Simulate Time: {simulate_time:.5f}")
 
-from BMP import Workspace as W
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
 
-@hydra.main(version_base=None, config_path=".", config_name="config_bmp")
+
+from linear_regression_snpe import Workspace as W
+
+@hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
     fname = os.getcwd() + '/latest.pt'
     if os.path.exists(fname):
+        #TODO: Test this portion of the code
         print(f'Resuming fom {fname}')
         with open(fname, 'rb') as f:
             workspace = pkl.load(f)
