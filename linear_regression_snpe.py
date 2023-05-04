@@ -117,7 +117,8 @@ class Workspace:
 
                 self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
                 # self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=1e-6, maxval=1e6)
-                self.xi = self.xi.squeeze()
+                
+                self.xi = self.xi.T
                 self.d_sim = self.xi
             else:
                 self.d = jnp.array([self.cfg.designs.d])

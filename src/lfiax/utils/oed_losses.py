@@ -209,7 +209,7 @@ def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey,
         return result[0]
     
     keys = jrandom.split(prng_key, 2 + M)
-    
+    # breakpoint()
     # Broadcast xi design params & initial priors
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
     
