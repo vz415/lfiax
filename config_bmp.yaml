@@ -11,7 +11,7 @@ wandb:
   project: onestep_BMP_sweep
 
 contrastive_sampling:
-  M: 10_000
+  M: 100
   N: 100
 
 designs:

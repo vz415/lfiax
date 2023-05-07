@@ -2,7 +2,7 @@ import omegaconf
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import wandb
-import os
+import os, sys
 import csv, time
 import pickle as pkl
 import math
@@ -28,7 +28,11 @@ from lfiax.utils.oed_losses import lf_pce_eig_scan
 from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
 # from lfiax.utils.utils import jax_lexpand
 
-from sbidoeman.simulator import bmp_simulator
+# from sbidoeman.simulator import bmp_simulator
+
+sys.path.append(os.path.join(os.path.dirname(__file__), 'bmp_simulator'))
+
+from simulate_bmp import bmp_simulator
 
 from typing import (
     Any,
@@ -82,15 +86,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -324,7 +328,7 @@ class Workspace:
             Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
             simulate time: {simulate_time:.5f}")
             
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
         
 
 from BMP import Workspace as W

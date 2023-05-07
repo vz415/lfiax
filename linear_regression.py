@@ -159,6 +159,7 @@ class Workspace:
         self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
         self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
         self.xi_lr_end = self.cfg.optimization_params.xi_lr_end
+        self.eig_lambda = self.cfg.optimization_params.eig_lambda
 
         # Scheduler to use
         if self.xi_scheduler == "None":

@@ -46,6 +46,7 @@ optimization_params:
   xi_lr_end: 1e-3
   lr_values: [5e-2, 1e-2, 5e-3]
   restarts: 3
+  eig_lambda: 0.5
 
 
 hydra:
