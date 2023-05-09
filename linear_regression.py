@@ -83,15 +83,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -99,7 +99,9 @@ class Workspace:
         current_time = time.localtime()
         current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
         
-        self.subdir = os.path.join(os.getcwd(), "neurips", 'pce_lin_reg', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
+        file_name = f"eig_lambda_{eig_lambda_str}"
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -242,11 +244,11 @@ class Workspace:
         logf, writer = self._init_logging()
         tic = time.time()
         
-        @partial(jax.jit, static_argnums=[5,6])
+        @partial(jax.jit, static_argnums=[5,6,8])
         def update_pce(
             flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
             opt_state: OptState, opt_state_xi: OptState, N: int, M: int, \
-            designs: Array,
+            designs: Array, lam: float
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
@@ -254,7 +256,7 @@ class Workspace:
             
             (loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)), grads = jax.value_and_grad(
                 lf_pce_eig_scan_lin_reg, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M
+                flow_params, xi_params, prng_key, log_prob_fun, designs, N=N, M=M, lam=lam
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
@@ -301,7 +303,7 @@ class Workspace:
         for step in range(self.training_steps):
             tic = time.time()
             flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std = update_pce(
-                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, 
+                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, N=self.N, M=self.M, designs=self.d_sim, lam=self.eig_lambda
             )
             
             if jnp.any(jnp.isnan(xi_grads['xi'])):
@@ -347,7 +349,7 @@ class Workspace:
             })
             logf.flush()
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "kl_divs": kl_div, "EIG": EIG})
     
     def _init_logging(self):
         path = os.path.join(self.subdir, 'log.csv')

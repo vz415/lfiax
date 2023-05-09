@@ -84,7 +84,7 @@ def _safe_mean_terms(terms):
 @partial(jax.jit, static_argnums=[3,5,6])
 def lf_pce_eig_scan_lin_reg(flow_params: hk.Params, xi_params: hk.Params, 
                      prng_key: PRNGKey, log_prob_fun: Callable, 
-                     designs: Array, N: int=100, M: int=10,):
+                     designs: Array, N: int=100, M: int=10, lam: float=0.5):
     """
     Calculates LF-PCE loss using jax.lax.scan to accelerate.
     """
@@ -145,7 +145,7 @@ def lf_pce_eig_scan_lin_reg(flow_params: hk.Params, xi_params: hk.Params,
     # loss = 0.01 * design_spread + EIG
     # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
     # loss = jnp.mean(conditional_lp)
-    loss = EIG #+ jnp.mean(conditional_lp)
+    loss = EIG + lam * jnp.mean(conditional_lp)
     
     return -loss , (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)
 
@@ -153,7 +153,7 @@ def lf_pce_eig_scan_lin_reg(flow_params: hk.Params, xi_params: hk.Params,
 @partial(jax.jit, static_argnums=[3,6,7,8])
 def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, 
                     prior: Callable, scaled_x: Array, theta_0: Array, 
-                    log_prob_fun: Callable, N: int=100, M: int=10,):
+                    log_prob_fun: Callable, N: int=100, M: int=10, lam: float=0.5,):
     """
     Calculates LF-PCE loss using jax.lax.scan to accelerate.
     """
@@ -182,16 +182,15 @@ def lf_pce_eig_scan(flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNG
     
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
 
-    loss = EIG + jnp.mean(conditional_lp)
+    loss = EIG + lam * jnp.mean(conditional_lp)
     
     return -loss , (conditional_lp, EIG)
 
 
-# TODO: Check static argnums
 @partial(jax.jit, static_argnums=[3,6,7,8])
 def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, 
            prior: Callable, scaled_x: Array, theta_0: Array,
-           post_log_prob_fun: Callable, N: int=100, M: int=10,):
+           post_log_prob_fun: Callable, N: int=100, M: int=10, lam: float=0.5):
     """
     Calculates LF-PCE loss using jax.lax.scan to accelerate. Requires a likelihood
     log_prob function and a prior. Will use to calculate the EIG and amortized density.
@@ -215,7 +214,7 @@ def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey,
     
     if len(scaled_x.shape) > 2:
         scaled_x = scaled_x.squeeze(0)
-
+    
     conditional_lp = post_log_prob_fun(post_params, theta_0, scaled_x, xi)
     prior_lp = prior.log_prob(theta_0)
     conditional_lp = conditional_lp - prior_lp
@@ -226,7 +225,7 @@ def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey,
     # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
 
-    loss = EIG #+ jnp.mean(conditional_lp - prior_lp)
+    loss = EIG + lam * jnp.mean(conditional_lp - prior_lp)
     
     return -loss , (conditional_lp, EIG)
 

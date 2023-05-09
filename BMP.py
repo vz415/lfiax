@@ -99,6 +99,14 @@ class Workspace:
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
 
+        current_time = time.localtime()
+        current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
+        
+        eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
+        file_name = f"eig_lambda_{eig_lambda_str}"
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        os.makedirs(self.subdir, exist_ok=True)
+
         self.seed = self.cfg.seed
         rng = jrandom.PRNGKey(self.seed)
         keys = jrandom.split(rng)
@@ -159,50 +167,37 @@ class Workspace:
         self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
         self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
         self.xi_lr_end = self.cfg.optimization_params.xi_lr_end
+        self.eig_lambda = self.cfg.optimization_params.eig_lambda
 
         # Scheduler to use
         if self.xi_scheduler == "None":
             self.schedule = self.xi_lr_init
-        elif self.xi_scheduler == "Linear":
-            self.schedule = optax.linear_schedule(self.xi_lr_init, self.xi_lr_end, transition_steps=self.training_steps)
-        elif self.xi_scheduler == "Exponential":
-            self.schedule = optax.exponential_decay(
-                init_value=self.xi_lr_init,
-                transition_steps=self.training_steps,
-                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / self.training_steps),
-                staircase=False
-            )
-        elif self.xi_scheduler == "CosineDecay":
-            lr_values = self.cfg.optimization_params.lr_values
-            restarts = self.cfg.optimization_params.restarts
-            decay_steps = self.training_steps / restarts
-            def cosine_decay_multirestart_schedules(
-                    lr_values, decay_steps, restarts, alpha=0.0, exponent=1.0):
-                schedules = []
-                boundaries = []
-                for i in range(restarts):
-                    lr = lr_values[i % len(lr_values)]
-                    d = decay_steps * (i + 1)
-                    s = optax.cosine_decay_schedule(
-                        lr, decay_steps, alpha=alpha)
-                    schedules.append(s)
-                    boundaries.append(d)
-                return optax.join_schedules(schedules, boundaries)
 
-            self.schedule = cosine_decay_multirestart_schedules(
-                lr_values, decay_steps, restarts, alpha=self.xi_lr_end)
-        else:
-            raise AssertionError("Specified unsupported scheduler.")
+        # # @hk.transform_with_state
+        # @hk.without_apply_rng
+        # @hk.transform
+        # def log_prob(x: Array, theta: Array, xi: Array) -> Array:
+        #     '''Up to user to appropriately scale their inputs :).'''
+        #     # TODO: Pass more nsf parameters from config.yaml
+        #     model = make_nsf(
+        #         event_shape=self.EVENT_SHAPE,
+        #         num_layers=flow_num_layers,
+        #         hidden_sizes=[hidden_size] * mlp_num_layers,
+        #         num_bins=num_bins,
+        #         standardize_theta=True,
+        #         use_resnet=True,
+        #         conditional=True
+        #     )
+        #     return model.log_prob(x, theta, xi)
 
+        # self.log_prob = log_prob
 
-        # @hk.transform_with_state
         @hk.without_apply_rng
         @hk.transform
-        def log_prob(x: Array, theta: Array, xi: Array) -> Array:
-            '''Up to user to appropriately scale their inputs :).'''
-            # TODO: Pass more nsf parameters from config.yaml
+        def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:
+            theta_scaled = standard_scale(theta)
             model = make_nsf(
-                event_shape=self.EVENT_SHAPE,
+                event_shape=self.theta_shape,
                 num_layers=flow_num_layers,
                 hidden_sizes=[hidden_size] * mlp_num_layers,
                 num_bins=num_bins,
@@ -210,9 +205,9 @@ class Workspace:
                 use_resnet=True,
                 conditional=True
             )
-            return model.log_prob(x, theta, xi)
+            return model.log_prob(theta_scaled, x, xi)
 
-        self.log_prob = log_prob
+        self.post_log_prob = posterior_log_prob
 
         # Simulator (BMP onestep model) to use
         model_size = (1,1,1)
@@ -225,32 +220,57 @@ class Workspace:
         
 
     def run(self) -> Callable:
+        logf, writer = self._init_logging()
         # tic = time.time()
 
-        @partial(jax.jit, static_argnums=[5,7,8])
-        def update_pce(
-            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
-            opt_state: OptState, opt_state_xi: OptState, prior: Callable, \
-            scaled_x: Array,  N: int, M: int, theta_0: Array,
+        # @partial(jax.jit, static_argnums=[5,7,8,10])
+        # def update_pce(
+        #     flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
+        #     opt_state: OptState, opt_state_xi: OptState, prior: Callable, \
+        #     scaled_x: Array,  N: int, M: int, theta_0: Array, lam: float
+        # ) -> Tuple[hk.Params, OptState]:
+        #     """Single SGD update step."""
+        #     log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
+        #         params, x, theta, xi)
+            
+        #     (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
+        #         lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
+        #         flow_params, xi_params, prng_key, prior, scaled_x, theta_0,
+        #         log_prob_fun, N=N, M=M, lam=lam
+        #         )
+            
+        #     updates, new_opt_state = optimizer.update(grads[0], opt_state)
+        #     xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
+            
+        #     new_params = optax.apply_updates(flow_params, updates)
+        #     new_xi_params = optax.apply_updates(xi_params, xi_updates)
+            
+        #     return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, EIG
+        
+        @partial(jax.jit, static_argnums=[5,8,9,10])
+        def update_snpe_pce(
+            post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
+            opt_state: OptState, opt_state_xi: OptState, prior: Callable, 
+            scaled_x: Array, theta_0: Array, N: int, M: int, lam: float,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
-            log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
+            post_log_prob_fun = lambda params, x, theta, xi: self.post_log_prob.apply(
                 params, x, theta, xi)
             
             (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
-                lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
-                flow_params, xi_params, prng_key, prior, scaled_x, theta_0,
-                log_prob_fun, N=N, M=M
+                snpe_c, argnums=[0,1], has_aux=True)(
+                post_params, xi_params, prng_key, prior, scaled_x, theta_0,
+                post_log_prob_fun, N=N, M=M, lam=lam
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-            
-            new_params = optax.apply_updates(flow_params, updates)
+
+            new_params = optax.apply_updates(post_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
             
             return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, EIG
-        
+
         # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
         params = self.log_prob.init(
@@ -296,7 +316,7 @@ class Workspace:
             simulate_time = time.time() - tic
             tic = time.time()
             flow_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_pce(
-                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, N=self.N, M=self.M, theta_0=theta_0.squeeze()
+                flow_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, N=self.N, M=self.M, theta_0=theta_0.squeeze(), lam=self.eig_lambda
             )
             
             if jnp.any(jnp.isnan(xi_grads['xi'])):
@@ -327,8 +347,28 @@ class Workspace:
             print(f"STEP: {step:5d}; d_sim: {float(self.d_sim):.5f}; Xi: {float(xi_params['xi']):.5f}; \
             Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
             simulate time: {simulate_time:.5f}")
+
+            writer.writerow({
+                'STEP': step, 
+                'd_sim': self.d_sim,
+                'Xi': xi_params['xi'],
+                'Loss': loss,
+                'EIG': EIG,
+                'inference_time':float(inference_time)
+            })
+            logf.flush()
             
             # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
+
+    def _init_logging(self):
+        path = os.path.join(self.subdir, 'log.csv')
+        logf = open(path, 'a') 
+        fieldnames = ['STEP', 'd_sim', 'Xi', 'Loss', 'EIG', 'inference_time']
+        writer = csv.DictWriter(logf, fieldnames=fieldnames)
+        if os.stat(path).st_size == 0:
+            writer.writeheader()
+            logf.flush()
+        return logf, writer
         
 
 from BMP import Workspace as W

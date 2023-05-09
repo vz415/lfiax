@@ -82,15 +82,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -98,7 +98,9 @@ class Workspace:
         current_time = time.localtime()
         current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
         
-        self.subdir = os.path.join(os.getcwd(), "neurips", 'snpe_pce_lin_reg', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
+        file_name = f"eig_lambda_{eig_lambda_str}"
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -169,40 +171,11 @@ class Workspace:
         self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
         self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
         self.xi_lr_end = self.cfg.optimization_params.xi_lr_end
+        self.eig_lambda = self.cfg.optimization_params.eig_lambda
 
         # Scheduler to use
         if self.xi_scheduler == "None":
             self.schedule = self.xi_lr_init
-        elif self.xi_scheduler == "Linear":
-            self.schedule = optax.linear_schedule(self.xi_lr_init, self.xi_lr_end, transition_steps=self.training_steps)
-        elif self.xi_scheduler == "Exponential":
-            self.schedule = optax.exponential_decay(
-                init_value=self.xi_lr_init,
-                transition_steps=self.training_steps,
-                decay_rate=(self.xi_lr_end / self.xi_lr_init) ** (1 / self.training_steps),
-                staircase=False
-            )
-        elif self.xi_scheduler == "CosineDecay":
-            lr_values = self.cfg.optimization_params.lr_values
-            restarts = self.cfg.optimization_params.restarts
-            decay_steps = self.training_steps / restarts
-            def cosine_decay_multirestart_schedules(
-                    lr_values, decay_steps, restarts, alpha=0.0, exponent=1.0):
-                schedules = []
-                boundaries = []
-                for i in range(restarts):
-                    lr = lr_values[i % len(lr_values)]
-                    d = decay_steps * (i + 1)
-                    s = optax.cosine_decay_schedule(
-                        lr, decay_steps, alpha=alpha)
-                    schedules.append(s)
-                    boundaries.append(d)
-                return optax.join_schedules(schedules, boundaries)
-
-            self.schedule = cosine_decay_multirestart_schedules(
-                lr_values, decay_steps, restarts, alpha=self.xi_lr_end)
-        else:
-            raise AssertionError("Specified unsupported scheduler.")
         
         @hk.without_apply_rng
         @hk.transform
@@ -224,11 +197,11 @@ class Workspace:
     def run(self) -> Callable:
         logf, writer = self._init_logging()
 
-        @partial(jax.jit, static_argnums=[5,8,9])
+        @partial(jax.jit, static_argnums=[5,8,9,10])
         def update_snpe_pce(
             post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
             opt_state: OptState, opt_state_xi: OptState, prior: Callable, 
-            scaled_x: Array, theta_0: Array, N: int, M: int, 
+            scaled_x: Array, theta_0: Array, N: int, M: int, lam: float,
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
             post_log_prob_fun = lambda params, x, theta, xi: self.post_log_prob.apply(
@@ -237,7 +210,7 @@ class Workspace:
             (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
                 snpe_c, argnums=[0,1], has_aux=True)(
                 post_params, xi_params, prng_key, prior, scaled_x, theta_0,
-                post_log_prob_fun, N=N, M=M
+                post_log_prob_fun, N=N, M=M, lam=lam
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
@@ -295,7 +268,7 @@ class Workspace:
             tic = time.time()
 
             post_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_snpe_pce(
-                post_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, theta_0=theta_0.squeeze(), N=self.N, M=self.M
+                post_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, theta_0=theta_0.squeeze(), N=self.N, M=self.M, lam=self.eig_lambda
             )
             
             if jnp.any(jnp.isnan(xi_grads['xi'])):
@@ -335,11 +308,11 @@ class Workspace:
                 'Xi': xi_params['xi'],
                 'Loss': loss,
                 'EIG': EIG,
-                'inference_time':float(inference_time)
+                'inference_time':float(inference_time),
             })
             logf.flush()
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
     
     def _init_logging(self):
         path = os.path.join(self.subdir, 'log.csv')
