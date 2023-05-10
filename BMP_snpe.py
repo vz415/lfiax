@@ -288,7 +288,8 @@ class Workspace:
         # Normalize xi values for optimizer
         design_min = 1e-6
         design_max = 1e4
-        scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
+        scale_factor = float(jnp.max(
+            jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
         xi_params_max_norm = {}
         xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
         # TODO: try normal scaling the xi_params to get more consistent training
@@ -318,14 +319,23 @@ class Workspace:
                 break
             
             # Setting bounds on the designs
-            xi_params_max_norm['xi'] = jnp.clip(
-                xi_params_max_norm['xi'], 
-                a_min=jnp.divide(design_min, scale_factor), # This could get small...
-                a_max=jnp.divide(design_max, scale_factor)
-                )
+            # xi_params_max_norm['xi'] = jnp.clip(
+            #     xi_params_max_norm['xi'], 
+            #     a_min=jnp.divide(design_min, scale_factor), # This could get small...
+            #     a_max=jnp.divide(design_max, scale_factor)
+            #     )
             
             # Unnormalize to use for simulator params
             xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
+
+            # Clip after renormalizing
+            xi_params['xi'] = jnp.clip(
+                xi_params['xi'],
+                a_min=1e-6,
+                a_max=1e3 # Note, this is different than max in scale_factor
+            )
+
+            xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
 
             # Update d_sim vector for new simulations
             if jnp.size(self.d) == 0:

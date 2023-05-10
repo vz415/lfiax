@@ -16,7 +16,7 @@ contrastive_sampling:
 
 designs:
   d: null
-  xi: [0.]
+  xi: [1000.]
   num_xi: 1
 
 param_shapes:

@@ -104,7 +104,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "neurips", 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "neurips", 'BMP_lf_pce', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -174,30 +174,13 @@ class Workspace:
             self.schedule = self.xi_lr_init
 
         # # @hk.transform_with_state
-        # @hk.without_apply_rng
-        # @hk.transform
-        # def log_prob(x: Array, theta: Array, xi: Array) -> Array:
-        #     '''Up to user to appropriately scale their inputs :).'''
-        #     # TODO: Pass more nsf parameters from config.yaml
-        #     model = make_nsf(
-        #         event_shape=self.EVENT_SHAPE,
-        #         num_layers=flow_num_layers,
-        #         hidden_sizes=[hidden_size] * mlp_num_layers,
-        #         num_bins=num_bins,
-        #         standardize_theta=True,
-        #         use_resnet=True,
-        #         conditional=True
-        #     )
-        #     return model.log_prob(x, theta, xi)
-
-        # self.log_prob = log_prob
-
         @hk.without_apply_rng
         @hk.transform
-        def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:
-            theta_scaled = standard_scale(theta)
+        def log_prob(x: Array, theta: Array, xi: Array) -> Array:
+            '''Up to user to appropriately scale their inputs :).'''
+            # TODO: Pass more nsf parameters from config.yaml
             model = make_nsf(
-                event_shape=self.theta_shape,
+                event_shape=self.EVENT_SHAPE,
                 num_layers=flow_num_layers,
                 hidden_sizes=[hidden_size] * mlp_num_layers,
                 num_bins=num_bins,
@@ -205,9 +188,26 @@ class Workspace:
                 use_resnet=True,
                 conditional=True
             )
-            return model.log_prob(theta_scaled, x, xi)
+            return model.log_prob(x, theta, xi)
 
-        self.post_log_prob = posterior_log_prob
+        self.log_prob = log_prob
+
+        # @hk.without_apply_rng
+        # @hk.transform
+        # def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:
+        #     theta_scaled = standard_scale(theta)
+        #     model = make_nsf(
+        #         event_shape=self.theta_shape,
+        #         num_layers=flow_num_layers,
+        #         hidden_sizes=[hidden_size] * mlp_num_layers,
+        #         num_bins=num_bins,
+        #         standardize_theta=True,
+        #         use_resnet=True,
+        #         conditional=True
+        #     )
+        #     return model.log_prob(theta_scaled, x, xi)
+
+        # self.post_log_prob = posterior_log_prob
 
         # Simulator (BMP onestep model) to use
         model_size = (1,1,1)
@@ -223,54 +223,30 @@ class Workspace:
         logf, writer = self._init_logging()
         # tic = time.time()
 
-        # @partial(jax.jit, static_argnums=[5,7,8,10])
-        # def update_pce(
-        #     flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
-        #     opt_state: OptState, opt_state_xi: OptState, prior: Callable, \
-        #     scaled_x: Array,  N: int, M: int, theta_0: Array, lam: float
-        # ) -> Tuple[hk.Params, OptState]:
-        #     """Single SGD update step."""
-        #     log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
-        #         params, x, theta, xi)
-            
-        #     (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
-        #         lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
-        #         flow_params, xi_params, prng_key, prior, scaled_x, theta_0,
-        #         log_prob_fun, N=N, M=M, lam=lam
-        #         )
-            
-        #     updates, new_opt_state = optimizer.update(grads[0], opt_state)
-        #     xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-            
-        #     new_params = optax.apply_updates(flow_params, updates)
-        #     new_xi_params = optax.apply_updates(xi_params, xi_updates)
-            
-        #     return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, EIG
-        
-        @partial(jax.jit, static_argnums=[5,8,9,10])
-        def update_snpe_pce(
-            post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
-            opt_state: OptState, opt_state_xi: OptState, prior: Callable, 
-            scaled_x: Array, theta_0: Array, N: int, M: int, lam: float,
+        @partial(jax.jit, static_argnums=[5,7,8,10])
+        def update_pce(
+            flow_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey, \
+            opt_state: OptState, opt_state_xi: OptState, prior: Callable, \
+            scaled_x: Array,  N: int, M: int, theta_0: Array, lam: float
         ) -> Tuple[hk.Params, OptState]:
             """Single SGD update step."""
-            post_log_prob_fun = lambda params, x, theta, xi: self.post_log_prob.apply(
+            log_prob_fun = lambda params, x, theta, xi: self.log_prob.apply(
                 params, x, theta, xi)
             
             (loss, (conditional_lp, EIG)), grads = jax.value_and_grad(
-                snpe_c, argnums=[0,1], has_aux=True)(
-                post_params, xi_params, prng_key, prior, scaled_x, theta_0,
-                post_log_prob_fun, N=N, M=M, lam=lam
+                lf_pce_eig_scan, argnums=[0,1], has_aux=True)(
+                flow_params, xi_params, prng_key, prior, scaled_x, theta_0,
+                log_prob_fun, N=N, M=M, lam=lam
                 )
             
             updates, new_opt_state = optimizer.update(grads[0], opt_state)
             xi_updates, xi_new_opt_state = optimizer2.update(grads[1], opt_state_xi)
-
-            new_params = optax.apply_updates(post_params, updates)
+            
+            new_params = optax.apply_updates(flow_params, updates)
             new_xi_params = optax.apply_updates(xi_params, xi_updates)
             
             return new_params, new_xi_params, new_opt_state, xi_new_opt_state, loss, grads[1], xi_updates, conditional_lp, EIG
-
+        
         # Initialize the net's params
         prng_seq = hk.PRNGSequence(self.seed)
         params = self.log_prob.init(
@@ -324,14 +300,23 @@ class Workspace:
                 break
             
             # Setting bounds on the designs
-            xi_params_max_norm['xi'] = jnp.clip(
-                xi_params_max_norm['xi'], 
-                a_min=jnp.divide(design_min, scale_factor), # This could get small...
-                a_max=jnp.divide(design_max, scale_factor)
-                )
+            # xi_params_max_norm['xi'] = jnp.clip(
+            #     xi_params_max_norm['xi'], 
+            #     a_min=jnp.divide(design_min, scale_factor), # This could get small...
+            #     a_max=jnp.divide(design_max, scale_factor)
+            #     )
             
             # Unnormalize to use for simulator params
             xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
+
+            # Clip after renormalizing
+            xi_params['xi'] = jnp.clip(
+                xi_params['xi'],
+                a_min=1e-6,
+                a_max=1e3 # Note, this is different than max in scale_factor
+            )
+
+            xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
 
             # Update d_sim vector for new simulations
             if jnp.size(self.d) == 0:
