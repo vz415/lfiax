@@ -123,7 +123,7 @@ class Workspace:
 
                 self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
                 # self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=1e-6, maxval=1e6)
-                
+                self.xi = self.xi.T
                 self.d_sim = self.xi
             else:
                 self.d = jnp.array([self.cfg.designs.d])
@@ -286,7 +286,7 @@ class Workspace:
             tic = time.time()
             # get priors and simulate a data point
             theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,2))
-            x  = self.simulator(self.d_sim, theta_0.squeeze())
+            x  = self.simulator(self.d_sim.T, theta_0.squeeze())
             scaled_x = standard_scale(x)
             x_mean, x_std = jnp.mean(x), jnp.std(x) + 1e-10
             simulate_time = time.time() - tic
@@ -329,8 +329,8 @@ class Workspace:
             inference_time = time.time()-tic
 
             # Saving contents to file
-            print(f"STEP: {step:5d}; d_sim: {float(self.d_sim):.5f}; Xi: {float(xi_params['xi']):.5f}; \
-            Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
+            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; \
+            Xi Updates: {xi_updates['xi']}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
             simulate time: {simulate_time:.5f}")
 
             writer.writerow({

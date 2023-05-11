@@ -11,13 +11,13 @@ wandb:
   project: onestep_BMP_sweep
 
 contrastive_sampling:
-  M: 500
-  N: 500
+  M: 50
+  N: 50
 
 designs:
   d: null
   xi: [1000.]
-  num_xi: 1
+  num_xi: 10
 
 param_shapes:
   theta_shape: 2

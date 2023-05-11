@@ -17,7 +17,7 @@ contrastive_sampling:
 designs:
   d: null # [10.] # [-5., -2.5, 0., 2.5, 5., .1, .2, .3, .4, 0.01] #  # [0.] # 0. # null
   xi: [0.]
-  num_xi: 1
+  num_xi: 10
 
 param_shapes:
   theta_shape: 2

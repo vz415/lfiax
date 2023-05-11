@@ -82,15 +82,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -100,27 +100,16 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "neurips", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "neurips_linear", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
         rng = jrandom.PRNGKey(self.seed)
-        keys = jrandom.split(rng)
         
         if self.cfg.designs.num_xi is not None:
             if self.cfg.designs.d is None:
                 self.d = jnp.array([])
-                low = jnp.log(1e-6)
-                high = jnp.log(1e3)
-
-                uniform = distrax.Uniform(low=jnp.array([0.0]), high=jnp.array([1.0]))
-                log_uniform = distrax.Transformed(
-                    uniform, bijector=distrax.Lambda(lambda x: jnp.exp(x * (high - low) + low)))
-
-                self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
-                # self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=1e-6, maxval=1e6)
-                
-                self.xi = self.xi.T
+                self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=-10, maxval=10)
                 self.d_sim = self.xi
             else:
                 self.d = jnp.array([self.cfg.designs.d])
@@ -298,13 +287,12 @@ class Workspace:
             # Saving contents to file
             # print(f"STEP: {step:5d}; d_sim: {float(self.d_sim):.5f}; Xi: {float(xi_params['xi']):.5f}; \
             # Xi Updates: {float(xi_updates['xi']):.6f}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
-            print(f"STEP: {step:5d}; d_sim: {self.d_sim}; Xi: {xi_params['xi']}; \
+            print(f"STEP: {step:5d}; Xi: {xi_params['xi']}; \
             Xi Updates: {xi_updates['xi']}; Loss: {float(loss):.5f}; EIG: {float(EIG):.5f}; Inference Time: {inference_time:.5f} \
             Simulate Time: {simulate_time:.5f}")
 
             writer.writerow({
                 'STEP': step, 
-                'd_sim': self.d_sim,
                 'Xi': xi_params['xi'],
                 'Loss': loss,
                 'EIG': EIG,
@@ -312,12 +300,12 @@ class Workspace:
             })
             logf.flush()
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
     
     def _init_logging(self):
         path = os.path.join(self.subdir, 'log.csv')
         logf = open(path, 'a') 
-        fieldnames = ['STEP', 'd_sim', 'Xi', 'Loss', 'EIG', 'inference_time']
+        fieldnames = ['STEP', 'Xi', 'Loss', 'EIG', 'inference_time']
         writer = csv.DictWriter(logf, fieldnames=fieldnames)
         if os.stat(path).st_size == 0:
             writer.writeheader()

@@ -191,25 +191,6 @@ class Workspace:
         if self.xi_scheduler == "None":
             self.schedule = self.xi_lr_init
 
-        # # @hk.transform_with_state
-        # @hk.without_apply_rng
-        # @hk.transform
-        # def log_prob(x: Array, theta: Array, xi: Array) -> Array:
-        #     '''Up to user to appropriately scale their inputs :).'''
-        #     # TODO: Pass more nsf parameters from config.yaml
-        #     model = make_nsf(
-        #         event_shape=self.EVENT_SHAPE,
-        #         num_layers=flow_num_layers,
-        #         hidden_sizes=[hidden_size] * mlp_num_layers,
-        #         num_bins=num_bins,
-        #         standardize_theta=True,
-        #         use_resnet=True,
-        #         conditional=True
-        #     )
-        #     return model.log_prob(x, theta, xi)
-
-        # self.log_prob = log_prob
-
         @hk.without_apply_rng
         @hk.transform
         def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:

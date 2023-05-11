@@ -162,6 +162,9 @@ dmypy.json
 
 # neurips data
 *neurips/
+*neurips\ 2/
+*neurips_merged_old/
+*neurips_bmp/
 
 # pycache
 *__pycache__/
