@@ -41,7 +41,7 @@ def bmp_simulator(
     Returns:
         S: something
     """
-    # d = d.squeeze()
+    d = d.T
     # Check that the design is the right size (N, 1) not (1, N)
     n_L, n_A, n_B = model_size
     num_receptors = n_A + n_B
