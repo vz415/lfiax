@@ -6,9 +6,9 @@ import torch
 import torch.nn as nn
 from GPyOpt.methods import BayesianOptimization
 
-import sbidoeman.minebed.mine as mm
-import sbidoeman.minebed.methods as methods
-import sbidoeman.minebed.lower_bounds as lower_bounds
+import lfiax.minebed.mine as mm
+import lfiax.minebed.methods as methods
+import lfiax.minebed.lower_bounds as lower_bounds
 
 
 class BED:
