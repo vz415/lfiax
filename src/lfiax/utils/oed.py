@@ -54,7 +54,6 @@ def sdm_minebed(
             Optimal design(s) returned for the given model, simulator, and
             prior distribution (params).
     """
-    tic = time.time()
     # ----- PRIOR AND DOMAIN ----- #
     # Params sampled from the prior/posterior
     params = prior_sims
@@ -98,6 +97,4 @@ def sdm_minebed(
 
     bed_obj.train(BO_init_num=BO_INIT_NUM, BO_max_num=BO_MAX_NUM, verbosity=True)
     
-    inference_time = time.time() - tic
-    
-    return bed_obj, params, inference_time
+    return bed_obj

@@ -41,11 +41,10 @@ def bmp_simulator(
     Returns:
         S: something
     """
-    # d = d.squeeze()
     # Check that the design is the right size (N, 1) not (1, N)
     n_L, n_A, n_B = model_size
     num_receptors = n_A + n_B
-    ligands = d
+    ligands = d.T
     # breakpoint()
     # Splitting passed prior's columns to work with promisys
     # TODO: Think about making splitting and error assertion into its own function
@@ -71,6 +70,7 @@ def bmp_simulator(
         # Multiprocess the simulations
         Rs = None
         n_threads = n_threads
+        # breakpoint()
         with multiprocessing.Pool(n_threads) as pools:
             # %time
             S = pools.starmap(

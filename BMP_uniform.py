@@ -110,7 +110,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}_uniform"
-        self.subdir = os.path.join(os.getcwd(), "testy", '1e4scale', 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "neurips_bmp", '1e4scale', 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed

@@ -335,7 +335,7 @@ class GradientFreeBED(BED):
         self._reset_scheduler()
 
         # simulate data
-        Y = self.simulator(self.d_opt, self.prior)
+        Y = self.simulator(self.d_opt[None,:], self.prior)
         train_data = (self.prior, Y)
 
         # initialize MINE object and optimizer, scheduler
