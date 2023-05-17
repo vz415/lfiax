@@ -104,15 +104,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -122,7 +122,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "neurips", '1e4scale', 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "neurips_bmp_final", 'BMP', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -139,7 +139,8 @@ class Workspace:
                 log_uniform = distrax.Transformed(
                     uniform, bijector=distrax.Lambda(lambda x: jnp.exp(x * (high - low) + low)))
 
-                self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
+                # self.xi = log_uniform.sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,))
+                self.xi = distrax.Uniform(low=0., high=1e3).sample(seed=keys[0], sample_shape=(self.cfg.designs.num_xi,1))
                 # self.xi = jrandom.uniform(rng, shape=(self.cfg.designs.num_xi,), minval=1e-6, maxval=1e6)
                 self.xi = self.xi.T
                 self.d_sim = self.xi
@@ -343,7 +344,7 @@ class Workspace:
             })
             logf.flush()
             
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG, "simulation_time": simulate_time, "inference_time": inference_time})
 
     def _init_logging(self):
         path = os.path.join(self.subdir, 'log.csv')

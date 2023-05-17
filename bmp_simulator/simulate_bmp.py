@@ -44,7 +44,7 @@ def bmp_simulator(
     # Check that the design is the right size (N, 1) not (1, N)
     n_L, n_A, n_B = model_size
     num_receptors = n_A + n_B
-    ligands = d.T
+    ligands = d
     # breakpoint()
     # Splitting passed prior's columns to work with promisys
     # TODO: Think about making splitting and error assertion into its own function

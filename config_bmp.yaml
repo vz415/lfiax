@@ -8,16 +8,16 @@ seed: 0
 
 wandb:
   entity: vz_uci
-  project: onestep_BMP_sweep
+  project: BMP_snpe_uniform
 
 contrastive_sampling:
-  M: 5
-  N: 5
+  M: 500
+  N: 500
 
 designs:
   d: null
   xi: [1000.]
-  num_xi: 10
+  num_xi: 1
 
 param_shapes:
   theta_shape: 2

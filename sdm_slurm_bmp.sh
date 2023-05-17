@@ -2,13 +2,13 @@
 
 #SBATCH --job-name=lfiax        ## name of the job.
 #SBATCH -A eehui_lab                      ## account to charge
-#SBATCH -p free                          ## partition/queue name "standard" for paid and "free" fo free
+#SBATCH -p standard                          ## partition/queue name "standard" for paid and "free" fo free
 #SBATCH --error=./errors/error_%A_%a.txt    ## error log file name: %A is job id, %a is array task id
 #SBATCH --output=./logs/out_%A_%a.out       ## output filename
 #SBATCH --nodes=1                        ## number of nodes the job will use
 #SBATCH --ntasks=1                       ## number of processes to launch for each array iteration
 #SBATCH --cpus-per-task=1                ## number of cores the job needs
-#SBATCH --mem-per-cpu=18G
+#SBATCH --mem-per-cpu=32G
 #SBATCH --time=30:00:00                   ## time limit for each array task
 #SBATCH --array=1-10                      ## number of array tasks
 #SBATCH --mail-type=fail,end
@@ -24,7 +24,7 @@ export LD_LIBRARY_PATH=/data/homezvol1/vzaballa/.conda/envs/lfiax/lib/
 
 ## Run the script
 # python examples/linear_regression.py -m # ++seed=$SLURM_ARRAY_TASK_ID ++contrastive_sampling.M=10,11
-python BMP.py ++seed=$SLURM_ARRAY_TASK_ID
+python BMP_snpe.py ++seed=$SLURM_ARRAY_TASK_ID
 
 #python sbiDOEMAN/main_bma.py ++seed=$SLURM_ARRAY_TASK_ID ++num_design_rounds=5 ++BMP.model='onestep'
 #python sbiDOEMAN/main_random.py ++seed=$SLURM_ARRAY_TASK_ID ++SDM.random=True ++num_design_rounds=5 ++BMP.model="onestep"

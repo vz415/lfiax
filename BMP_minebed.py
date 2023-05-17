@@ -165,7 +165,7 @@ class Workspace:
 
         EIG = torch.mean(EIGs).detach().numpy()
 
-        inference_time = tic - time.time()
+        inference_time = time.time() - tic
 
         # TODO: Test this out...
         # Posteriors should be the model evaluated
