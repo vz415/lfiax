@@ -58,11 +58,10 @@ def conditional_scalar_conditioner_mlp(
                     jnp.subtract(theta, jnp.mean(theta, axis=0)), 
                     jnp.std(theta, axis=0) + 1e-10
                     )
-                # TODO: implement BatchNorm by creating stateful function
+                # TODO: implement BatchNorm & dropout by creating stateful function
                 # theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
             x = hk.Flatten()(x)
-            # breakpoint()
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((x, theta, xi), axis=1)
 

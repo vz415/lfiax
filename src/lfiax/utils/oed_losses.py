@@ -192,7 +192,7 @@ def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey,
            prior: Callable, scaled_x: Array, theta_0: Array,
            post_log_prob_fun: Callable, N: int=100, M: int=10, lam: float=0.5):
     """
-    Calculates LF-PCE loss using jax.lax.scan to accelerate. Requires a likelihood
+    Calculates NP-PCE loss using jax.lax.scan to accelerate. Requires a likelihood
     log_prob function and a prior. Will use to calculate the EIG and amortized density.
     """
     def compute_snpe_marginal_lp(keys, prior, post_log_prob_fun, M, N, x, conditional_lp):
@@ -208,8 +208,8 @@ def snpe_c(post_params: hk.Params, xi_params: hk.Params, prng_key: PRNGKey,
         return result[0]
     
     keys = jrandom.split(prng_key, 2 + M)
-    # breakpoint()
-    # Broadcast xi design params & initial priors
+    
+    # Broadcast scaled xi design params & initial priors
     xi = jnp.broadcast_to(xi_params['xi'], (N, xi_params['xi'].shape[-1]))
     
     if len(scaled_x.shape) > 2:

@@ -48,6 +48,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         y0, log_d = self._inner_bijector(params).forward_and_log_det(x)
         # TODO: Check that this makes sense for scalars...
         # if masked_x.shape[1] > 1 or len(masked_x) > 1:
+        # jax.debug.breakpoint()
         y = y0
         if len(masked_x) > 1:
             if masked_x.shape[1] > 1:
@@ -67,6 +68,7 @@ class MaskedConditionalCoupling(MaskedCoupling):
         # TODO: Better logic to detect when scalar y?
         params = self._conditioner(masked_y, theta, xi)
         x0, log_d = self._inner_bijector(params).inverse_and_log_det(y)
+        # jax.debug.breakpoint()
         # TODO: Check that this makes sense for scalars...
         if masked_y.shape[1] > 1:
             x = jnp.where(self._event_mask, y, x0)
@@ -76,4 +78,5 @@ class MaskedConditionalCoupling(MaskedCoupling):
             jnp.where(self._mask, 0.0, log_d),
             self._event_ndims - self._inner_event_ndims,
         )
+        # jax.debug.breakpoint()
         return x, logdet

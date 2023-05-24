@@ -53,39 +53,41 @@ def make_nsf(
     # for a total of `3 * num_bins + 1` parameters.
     num_bijector_params = 3 * num_bins + 1
 
-    if event_shape == (1,):
-        if conditional:
-            conditioner = conditional_scalar_conditioner_mlp(
-                event_shape,
-                hidden_sizes,
-                num_bijector_params,
-                standardize_theta,
-                use_resnet,
-            )
+    def create_conditioner():
+        """Creates a conditioner based on the given settings."""
+        if event_shape == (1,):
+            if conditional:
+                return conditional_scalar_conditioner_mlp(
+                    event_shape,
+                    hidden_sizes,
+                    num_bijector_params,
+                    standardize_theta,
+                    use_resnet,
+                )
+            else:
+                return scalar_conditioner_mlp(
+                    event_shape,
+                    hidden_sizes,
+                    num_bijector_params,
+                    use_resnet,
+                )
         else:
-            conditioner = scalar_conditioner_mlp(
-                event_shape,
-                hidden_sizes,
-                num_bijector_params,
-                use_resnet,
-            )
-    else:
-        if conditional:
-            conditioner = conditional_conditioner_mlp(
-                event_shape,
-                hidden_sizes,
-                num_bijector_params,
-                standardize_theta,
-                use_resnet,
-            )
-        else:
-            conditioner = conditioner_mlp(
-                event_shape,
-                hidden_sizes,
-                num_bijector_params,
-                standardize_theta,
-                use_resnet,
-            )
+            if conditional:
+                return conditional_conditioner_mlp(
+                    event_shape,
+                    hidden_sizes,
+                    num_bijector_params,
+                    standardize_theta,
+                    use_resnet,
+                )
+            else:
+                return conditioner_mlp(
+                    event_shape,
+                    hidden_sizes,
+                    num_bijector_params,
+                    standardize_theta,
+                    use_resnet,
+                )
     
     layers = []
 
@@ -96,7 +98,7 @@ def make_nsf(
             layer = MaskedConditionalCoupling(
                 mask=mask,
                 bijector=bijector_fn,
-                conditioner=conditioner,
+                conditioner=create_conditioner(),
             )
             layers.append(layer)
             # Flip the mask after each layer as long as event is non-scalar.

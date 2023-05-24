@@ -54,6 +54,7 @@ class ConditionalTransformed(Transformed):
           A tuple of `n` samples and their log probs.
         """
         x, lp_x = self.distribution.sample_and_log_prob(seed=key, sample_shape=n)
+        # TODO: if i want to use this, i have to fix this vmap working with my conditioner net
         y, fldj = jax.vmap(self.bijector.forward_and_log_det)(x, theta, xi)
         lp_y = jax.vmap(jnp.subtract)(lp_x, fldj)
         return y, lp_y

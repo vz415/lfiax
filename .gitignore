@@ -150,6 +150,9 @@ dmypy.json
 # csvs
 *.csv
 
+# Images
+*.png
+
 # wandb
 *wandb/
 *examples/wandb/

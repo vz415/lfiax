@@ -23,6 +23,52 @@ Array = jnp.ndarray
 Batch = Mapping[str, np.ndarray]
 PRNGKey = Array
 
+
+def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename):
+    # Create a figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+
+    # Plot the first histogram in the first subplot
+    ax1.hist(prior_samples[:, 0], bins=30)
+    ax1.hist(posterior_samples[:, 0], bins=30, alpha=0.5, color='orange', label='Posterior')
+    ax1.axvline(posterior_samples[:, 0].mean(), color='g', linestyle='--')
+    ax1.axvline(true_theta[0][0], color='r', linestyle='--')
+    ax1.set_title("theta_1")
+    ax1.set_xlabel("Value")
+    ax1.set_ylabel("Frequency")
+
+    # Plot the second histogram in the second subplot
+    ax2.hist(prior_samples[:, 1], bins=30)
+    ax2.hist(posterior_samples[:, 1], bins=30, alpha=0.5, color='orange', label='Posterior')
+    ax2.axvline(posterior_samples[:, 1].mean(), color='g', linestyle='--')
+    ax2.axvline(true_theta[0][1], color='r', linestyle='--')
+    ax2.set_title("theta_0")
+    ax2.set_xlabel("Value")
+    ax2.set_ylabel("Frequency")
+
+    # Save the plot as a PNG file with the provided filename
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+
+    # Display the figure
+    # plt.show()
+
+
+def save_posterior_marginal(posterior_samples_marginal, filename):
+    # Create a figure
+    fig = plt.figure(figsize=(8, 6))
+    
+    # Plot the histogram
+    plt.hist(posterior_samples_marginal, bins=50)
+    
+    # Set labels and title
+    plt.xlabel("Value")
+    plt.ylabel("Frequency")
+    plt.title("Posterior Marginal")
+    
+    # Save the plot as a PNG file with the provided filename
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    
+
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""
     if jnp.isscalar(A):

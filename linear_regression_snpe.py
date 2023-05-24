@@ -82,15 +82,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -145,13 +145,6 @@ class Workspace:
         mlp_num_layers = self.cfg.flow_params.mlp_num_layers
         hidden_size = self.cfg.flow_params.mlp_hidden_size
         num_bins = self.cfg.flow_params.num_bins
-
-        # vi flow's parameters
-        vi_flow_num_layers = self.cfg.vi_flow_params.num_layers
-        vi_mlp_num_layers = self.cfg.vi_flow_params.mlp_num_layers
-        vi_hidden_size = self.cfg.vi_flow_params.mlp_hidden_size
-        vi_num_bins = self.cfg.vi_flow_params.num_bins
-        self.vi_samples = self.cfg.vi_flow_params.vi_samples
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
@@ -218,7 +211,7 @@ class Workspace:
             np.zeros((1, *self.EVENT_SHAPE)),
             np.zeros((1, *self.xi_shape)),
         )
-
+        
         optimizer = optax.adam(self.learning_rate)
         opt_state = optimizer.init(post_params)
 
@@ -242,13 +235,14 @@ class Workspace:
 
         opt_state_xi = optimizer2.init(xi_params_max_norm)
         post_params = {key: value for key, value in post_params.items() if key != 'xi'}
-
+        
         priors = make_lin_reg_prior()
         
         for step in range(self.training_steps):
             tic = time.time()
             # get priors and simulate a data point
             theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,))
+            # breakpoint()
             x, _, _  = sim_linear_data_vmap_theta(self.d_sim, theta_0, next(prng_seq))
             
             scaled_x = standard_scale(x)
@@ -300,8 +294,20 @@ class Workspace:
             })
             logf.flush()
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
-    
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
+
+        # Create a dictionary to store the objects.
+
+        # objects = {
+        #     'flow_params': jax.device_get(post_params),
+        #     'xi_params': jax.device_get(xi_params),
+        # }
+
+        # Save the objects.
+        # with open("SNPE_best_100D_params.pkl", "wb") as f:
+        #     pkl.dump(objects, f)
+
+        
     def _init_logging(self):
         path = os.path.join(self.subdir, 'log.csv')
         logf = open(path, 'a') 

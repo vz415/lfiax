@@ -4,7 +4,7 @@ defaults:
 
 version: '0.0.1'
 
-seed: 0
+seed: 8
 
 wandb:
   entity: vz_uci
@@ -17,7 +17,7 @@ contrastive_sampling:
 designs:
   d: null # [10.] # [-5., -2.5, 0., 2.5, 5., .1, .2, .3, .4, 0.01] #  # [0.] # 0. # null
   xi: [0.]
-  num_xi: 10
+  num_xi: 1
 
 param_shapes:
   theta_shape: 2
@@ -42,11 +42,11 @@ optimization_params:
   xi_learning_rate: 1e-2
   xi_optimizer: "Adam"
   xi_scheduler: "None"
-  training_steps: 1_000
+  training_steps: 10_000
   xi_lr_end: 1e-3
   lr_values: [5e-2, 1e-2, 5e-3]
   restarts: 3
-  eig_lambda: 0.5
+  eig_lambda: 1.
 
 
 hydra:

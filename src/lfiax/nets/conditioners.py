@@ -70,13 +70,14 @@ def conditional_conditioner_mlp(
                 # theta = hk.BatchNorm(
                 #     create_scale=True, 
                 #     create_offset=True,
-                #     # Never really going to "test" this
                 #     decay_rate=0.99)(theta, is_training=True)
             
+            # x = hk.Flatten(preserve_dims=-len(event_shape))(jnp.abs(x))
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
             theta = hk.Flatten()(theta)
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((theta, xi), axis=1)
+            # jax.debug.breakpoint()
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
                 for i, hidden in enumerate(hidden_sizes):
