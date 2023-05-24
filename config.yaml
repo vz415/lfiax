@@ -8,7 +8,7 @@ seed: 8
 
 wandb:
   entity: vz_uci
-  project: lfiax1D_linReg_snpe_EIG_only
+  project: lfiax_linReg_lf-pce_bugfix
 
 contrastive_sampling:
   M: 100
@@ -46,7 +46,7 @@ optimization_params:
   xi_lr_end: 1e-3
   lr_values: [5e-2, 1e-2, 5e-3]
   restarts: 3
-  eig_lambda: 1.
+  eig_lambda: 0.
 
 
 hydra:

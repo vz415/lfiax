@@ -82,15 +82,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        # wandb.config = omegaconf.OmegaConf.to_container(
-        #     cfg, resolve=True, throw_on_missing=True
-        #     )
-        # wandb.config.update(wandb.config)
-        # wandb.init(
-        #     entity=self.cfg.wandb.entity, 
-        #     project=self.cfg.wandb.project, 
-        #     config=wandb.config
-        #     )
+        wandb.config = omegaconf.OmegaConf.to_container(
+            cfg, resolve=True, throw_on_missing=True
+            )
+        wandb.config.update(wandb.config)
+        wandb.init(
+            entity=self.cfg.wandb.entity, 
+            project=self.cfg.wandb.project, 
+            config=wandb.config
+            )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -100,7 +100,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "neurips_linear", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "icml_linear", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -294,7 +294,7 @@ class Workspace:
             })
             logf.flush()
 
-            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
+            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
 
         # Create a dictionary to store the objects.
 
