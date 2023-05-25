@@ -8,7 +8,7 @@ seed: 0
 
 wandb:
   entity: vz_uci
-  project: BMP_snpe_uniform
+  project: BMP_lfpce_icml
 
 contrastive_sampling:
   M: 500

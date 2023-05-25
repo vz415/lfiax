@@ -26,7 +26,7 @@ import tensorflow_datasets as tfds
 from lfiax.flows.nsf import make_nsf
 from lfiax.utils.oed_losses import lf_pce_eig_scan
 from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
-# from lfiax.utils.utils import jax_lexpand
+from lfiax.utils.utils import standard_scale, inverse_standard_scale
 
 # from sbidoeman.simulator import bmp_simulator
 
@@ -62,30 +62,6 @@ def make_bmp_prior_uniform():
     return distrax.Uniform(low=0., high=1e3)
 
 
-@jax.jit
-def standard_scale(x):
-    def single_column_fn(x):
-        mean = jnp.mean(x)
-        std = jnp.std(x) + 1e-10
-        return (x - mean) / std
-        
-    def multi_column_fn(x):
-        mean = jnp.mean(x, axis=0, keepdims=True)
-        std = jnp.std(x, axis=0, keepdims=True) + 1e-10
-        return (x - mean) / std
-        
-    scaled_x = jax.lax.cond(
-        x.shape[-1] == 1,
-        single_column_fn,
-        multi_column_fn,
-        x
-    )
-    return scaled_x
-
-@jax.jit
-def inverse_standard_scale(scaled_x, shift, scale):
-    return (scaled_x + shift) * scale
-
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -107,7 +83,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "neurips_bmp_final", 'BMP_lf_pce', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "icml_bmp", 'BMP_lf_pce', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -195,23 +171,6 @@ class Workspace:
             return model.log_prob(x, theta, xi)
 
         self.log_prob = log_prob
-
-        # @hk.without_apply_rng
-        # @hk.transform
-        # def posterior_log_prob(theta: Array, x: Array, xi: Array) -> Array:
-        #     theta_scaled = standard_scale(theta)
-        #     model = make_nsf(
-        #         event_shape=self.theta_shape,
-        #         num_layers=flow_num_layers,
-        #         hidden_sizes=[hidden_size] * mlp_num_layers,
-        #         num_bins=num_bins,
-        #         standardize_theta=True,
-        #         use_resnet=True,
-        #         conditional=True
-        #     )
-        #     return model.log_prob(theta_scaled, x, xi)
-
-        # self.post_log_prob = posterior_log_prob
 
         # Simulator (BMP onestep model) to use
         model_size = (1,1,1)
@@ -317,7 +276,7 @@ class Workspace:
             xi_params['xi'] = jnp.clip(
                 xi_params['xi'],
                 a_min=1e-6,
-                a_max=1e3 # Note, this is different than max in scale_factor
+                a_max=1e3 # Note this is different than max in scale_factor
             )
 
             xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)

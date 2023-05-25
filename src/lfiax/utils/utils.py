@@ -68,6 +68,32 @@ def save_posterior_marginal(posterior_samples_marginal, filename):
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     
+    
+@jax.jit
+def inverse_standard_scale(scaled_x, shift, scale):
+    return (scaled_x * scale) + shift
+
+
+@jax.jit
+def standard_scale(x):
+    def single_column_fn(x):
+        mean = jnp.mean(x)
+        std = jnp.std(x) + 1e-10
+        return (x - mean) / std
+        
+    def multi_column_fn(x):
+        mean = jnp.mean(x, axis=0, keepdims=True)
+        std = jnp.std(x, axis=0, keepdims=True) + 1e-10
+        return (x - mean) / std
+        
+    scaled_x = jax.lax.cond(
+        x.shape[-1] == 1,
+        single_column_fn,
+        multi_column_fn,
+        x
+    )
+    return scaled_x
+
 
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""

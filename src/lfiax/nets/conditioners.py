@@ -77,7 +77,6 @@ def conditional_conditioner_mlp(
             theta = hk.Flatten()(theta)
             xi = hk.Flatten()(xi)
             z = jnp.concatenate((theta, xi), axis=1)
-            # jax.debug.breakpoint()
             x = jnp.concatenate((x, z), axis=1)
             if resnet:
                 for i, hidden in enumerate(hidden_sizes):
