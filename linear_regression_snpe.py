@@ -26,6 +26,7 @@ import tensorflow_datasets as tfds
 from lfiax.flows.nsf import make_nsf
 from lfiax.utils.oed_losses import snpe_c
 from lfiax.utils.simulators import sim_linear_data_vmap_theta
+from lfiax.utils.utils import standard_scale
 
 from typing import (
     Any,
@@ -55,25 +56,6 @@ def make_lin_reg_prior():
     return prior
 
 
-@jax.jit
-def standard_scale(x):
-    def single_column_fn(x):
-        mean = jnp.mean(x)
-        std = jnp.std(x) + 1e-10
-        return (x - mean) / std
-        
-    def multi_column_fn(x):
-        mean = jnp.mean(x, axis=0, keepdims=True)
-        std = jnp.std(x, axis=0, keepdims=True) + 1e-10
-        return (x - mean) / std
-        
-    scaled_x = jax.lax.cond(
-        x.shape[-1] == 1,
-        single_column_fn,
-        multi_column_fn,
-        x
-    )
-    return scaled_x
 
 @jax.jit
 def inverse_standard_scale(scaled_x, shift, scale):
@@ -82,15 +64,15 @@ def inverse_standard_scale(scaled_x, shift, scale):
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        wandb.config = omegaconf.OmegaConf.to_container(
-            cfg, resolve=True, throw_on_missing=True
-            )
-        wandb.config.update(wandb.config)
-        wandb.init(
-            entity=self.cfg.wandb.entity, 
-            project=self.cfg.wandb.project, 
-            config=wandb.config
-            )
+        # wandb.config = omegaconf.OmegaConf.to_container(
+        #     cfg, resolve=True, throw_on_missing=True
+        #     )
+        # wandb.config.update(wandb.config)
+        # wandb.init(
+        #     entity=self.cfg.wandb.entity, 
+        #     project=self.cfg.wandb.project, 
+        #     config=wandb.config
+        #     )
 
         self.work_dir = os.getcwd()
         print(f'workspace: {self.work_dir}')
@@ -100,7 +82,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "icml_linear", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "derp", 'snpe_pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -294,18 +276,18 @@ class Workspace:
             })
             logf.flush()
 
-            wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
+            # wandb.log({"loss": loss, "xi": xi_params['xi'], "xi_grads": xi_grads['xi'], "EIG": EIG})
 
         # Create a dictionary to store the objects.
 
-        # objects = {
-        #     'flow_params': jax.device_get(post_params),
-        #     'xi_params': jax.device_get(xi_params),
-        # }
+        objects = {
+            'flow_params': jax.device_get(post_params),
+            'xi_params': jax.device_get(xi_params),
+        }
 
         # Save the objects.
-        # with open("SNPE_best_100D_params.pkl", "wb") as f:
-        #     pkl.dump(objects, f)
+        with open("SNPE_best_1D_params_V2.pkl", "wb") as f:
+            pkl.dump(objects, f)
 
         
     def _init_logging(self):

@@ -36,7 +36,6 @@ from typing import (
 )
 
 
-
 class LogUniform(Transform):
     """
     Defines a transformation for a log-uniform distribution.
@@ -100,7 +99,7 @@ class Workspace:
         current_time = time.localtime()
         current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
         
-        self.subdir = os.path.join(os.getcwd(), 'neurips_BMP_minebed', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), 'icml_BMP_minebed', str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         # Torch seed stuff
