@@ -210,12 +210,17 @@ class Workspace:
         design_min = -10.
         design_max = 10.
         scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
+        scale_factor = 11.5
+        # Changed how the data was normalized to make it work with a probit function
         xi_params_max_norm = {}
-        xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'], scale_factor)
+        xi_params_max_norm['xi'] = jnp.divide(xi_params['xi'] + scale_factor, 2 * scale_factor)
         # TODO: try normal scaling the xi_params to get more consistent training
-        # xi_params_scaled = (xi_params['xi'] - jnp.mean(xi_params['xi'])) / (jnp.std(xi_params['xi']) + 1e-10)
-
-        opt_state_xi = optimizer2.init(xi_params_max_norm)
+        # Need to use a probit function
+        xi_params_scaled = {}
+        # xi_params_scaled['xi'] = (xi_params_max_norm['xi'] - jnp.mean(xi_params_max_norm['xi'])) / (jnp.std(xi_params_max_norm['xi']) + 1e-10)
+        xi_params_scaled['xi'] = jax.scipy.stats.norm.ppf(xi_params_max_norm['xi'])
+        # breakpoint()
+        opt_state_xi = optimizer2.init(xi_params_scaled)
         post_params = {key: value for key, value in post_params.items() if key != 'xi'}
         
         priors = make_lin_reg_prior()
@@ -224,7 +229,6 @@ class Workspace:
             tic = time.time()
             # get priors and simulate a data point
             theta_0 = priors.sample(seed=next(prng_seq), sample_shape=(self.N,))
-            # breakpoint()
             x, _, _  = sim_linear_data_vmap_theta(self.d_sim, theta_0, next(prng_seq))
             
             scaled_x = standard_scale(x)
@@ -232,23 +236,34 @@ class Workspace:
             simulate_time = time.time() - tic
             tic = time.time()
 
-            post_params, xi_params_max_norm, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_snpe_pce(
-                post_params, xi_params_max_norm, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, theta_0=theta_0.squeeze(), N=self.N, M=self.M, lam=self.eig_lambda
+            post_params, xi_params_scaled, opt_state, opt_state_xi, loss, xi_grads, xi_updates, conditional_lp, EIG = update_snpe_pce(
+                post_params, xi_params_scaled, next(prng_seq), opt_state, opt_state_xi, priors, scaled_x, theta_0=theta_0.squeeze(), N=self.N, M=self.M, lam=self.eig_lambda
             )
             
             if jnp.any(jnp.isnan(xi_grads['xi'])):
                 print("Gradients contain NaNs. Breaking out of loop.")
                 break
             
-            # Setting bounds on the designs
-            xi_params_max_norm['xi'] = jnp.clip(
-                xi_params_max_norm['xi'], 
-                a_min=jnp.divide(design_min, scale_factor), 
-                a_max=jnp.divide(design_max, scale_factor)
-                )
+            # Inverse scaling the data
+            xi_params_max_norm['xi'] = jax.scipy.stats.norm.cdf(xi_params_scaled['xi'])
+            # xi_params_max_norm['xi'] = xi_params_scaled['xi'] * (jnp.std(xi_params_max_norm['xi']) + 1e-10) + jnp.mean(xi_params_max_norm['xi'])
+
+            # # Setting bounds on the designs
+            # xi_params_max_norm['xi'] = jnp.clip(
+            #     xi_params_max_norm['xi'], 
+            #     a_min=jnp.divide(design_min, scale_factor), 
+            #     a_max=jnp.divide(design_max, scale_factor)
+            #     )
             
             # Unnormalize to use for simulator params
-            xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], scale_factor)
+            xi_params['xi'] = jnp.multiply(xi_params_max_norm['xi'], 2 * scale_factor) - 10.
+
+            # Setting bounds on the designs
+            xi_params['xi'] = jnp.clip(
+                xi_params['xi'], 
+                a_min=-10., 
+                a_max=10.
+                )
 
             # Update d_sim vector for new simulations
             if jnp.size(self.d) == 0:

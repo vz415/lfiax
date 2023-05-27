@@ -28,7 +28,7 @@ OptState = Any
 
 # Unpickling the weights and optimizer state to check things out
 # Load the objects.
-with open("SNPE_best_100D_params.pkl", "rb") as f:
+with open("SNPE_best_1D_params_V2.pkl", "rb") as f:
     loaded_objects = pkl.load(f)
 
 # Retrieve the loaded objects.
@@ -120,7 +120,7 @@ post_samples = post_sample.apply(post_params, key=next(prng_seq),
                                  x=x_obs_scale,
                                  xi=xi_params['xi'][None,:]/10.)
 
-
+# breakpoint()
 plot_prior_posterior(prior_samples, post_samples, true_theta, 'test_snpe_sampling.png')
 
 print(jnp.mean(post_samples, axis=0))
