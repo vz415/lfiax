@@ -23,17 +23,17 @@ def make_lin_reg_prior():
 # Constants
 N = 10
 M = 10
-KDE_SAMPLES = 50000
-D = 10  # Number of independent measurements
+KDE_SAMPLES = 100
+D = 1  # Number of independent measurements
 SEED = 420
 
 # Generate d* values
 key = jrandom.PRNGKey(SEED)
 key, subkey = jrandom.split(key)
 # d_star = jrandom.normal(subkey, (D, 1))
-d_star = jrandom.uniform(subkey, shape=(1,D), minval=-10, maxval=10)
+# d_star = jrandom.uniform(subkey, shape=(1,D), minval=-10, maxval=10)
 # d_star = jrandom.normal(subkey, (D,))
-# d_star = jnp.array([[10.]])
+d_star = jnp.array([[10.]])
 
 # Generate θ(i) and θ(s) samples
 key, subkey = jrandom.split(key)
@@ -64,7 +64,7 @@ nu_samples = distrax.Gamma(2.0, 0.5).sample(seed=subkey, sample_shape=(KDE_SAMPL
 p_noise_samples = epsilon_samples + nu_samples
 
 # Compute KDE using JAX's built-in function
-kde = gaussian_kde(p_noise_samples)
+kde = gaussian_kde(p_noise_samples.T)
 
 @jax.jit
 def p_yj_given_dj_theta_vmap(yj, dj, theta0, theta1):
@@ -72,38 +72,64 @@ def p_yj_given_dj_theta_vmap(yj, dj, theta0, theta1):
     has_batch_dim = False
     if hasattr(theta0, 'batch_dim'):
         # has_batch_dim = True
-        return kde.logpdf(yj - (theta1 + theta0 * dj))
+        # return kde.logpdf(yj - (theta1 + theta0 * dj))
+        reshaped_term = jnp.reshape(yj - (theta1 + theta0 * dj), (-1,1))
+        jax.debug.print("🤯 {x} 🤯", x=reshaped_term)
+        breakpoint()
+        return kde.logpdf(reshaped_term)
     # if has_batch_dim:
     # breakpoint()
     return kde.logpdf(yj.T - (theta1[:,None] + theta0[:,None] * dj))
         # theta0 = theta0.val
         # theta1 = theta1.val
-    
-    # return kde.logpdf(yj - (theta1[:,None] + theta0[:,None] * dj))
-    # return kde.logpdf(yj - (theta1 + theta0 * dj))
+#     # return kde.logpdf(yj - (theta1[:,None] + theta0[:,None] * dj))
+#     # return kde.logpdf(yj - (theta1 + theta0 * dj))
 
+
+# def single_sample_log_ratio(y_sample, d_star, theta_i_single, theta_s, M):
+#     log_p_y_i_theta_i = jnp.sum(
+#         p_yj_given_dj_theta_vmap(y_sample, d_star, theta_i_single[0], theta_i_single[1])
+#     )
+#     log_p_y_i_theta_s = jax.scipy.special.logsumexp(
+#         p_yj_given_dj_theta_vmap(
+#             y_sample[:, None], d_star, theta_s[:, 0], theta_s[:, 1]
+#             # y_sample, d_star, theta_s[:, 0], theta_s[:, 1]
+#         ),
+#         axis=0,
+#     ) - jnp.log(M)
+#     return log_p_y_i_theta_i - log_p_y_i_theta_s
+
+@jax.jit
+def p_yj_given_dj_theta(yj, dj, theta0, theta1):
+    return kde.logpdf(yj - (theta1 + theta0 * dj))
 
 def single_sample_log_ratio(y_sample, d_star, theta_i_single, theta_s, M):
+    # Adding vmap here to handle multiple y_sample values
+    p_yj_given_dj_theta_vmap = vmap(p_yj_given_dj_theta, (0, None, None, None))
+    d_star_broadcasted = jnp.repeat(d_star, len(y_sample), axis=0)
+
     log_p_y_i_theta_i = jnp.sum(
-        p_yj_given_dj_theta_vmap(y_sample, d_star, theta_i_single[0], theta_i_single[1])
+        p_yj_given_dj_theta_vmap(y_sample, d_star_broadcasted, theta_i_single[0], theta_i_single[1])
     )
-    # breakpoint()
+    
     log_p_y_i_theta_s = jax.scipy.special.logsumexp(
         p_yj_given_dj_theta_vmap(
-            y_sample[:, None], d_star, theta_s[:, 0], theta_s[:, 1]
-            # y_sample, d_star, theta_s[:, 0], theta_s[:, 1]
+            # y_sample[:, None], d_star, theta_s[:, 0], theta_s[:, 1]
+            y_sample[:, None], d_star, theta_s[0], theta_s[1]
         ),
         axis=0,
     ) - jnp.log(M)
     return log_p_y_i_theta_i - log_p_y_i_theta_s
 
+
 # print(y_noised.shape)
 # y_noised = y_noised.squeeze(0)[:N]
 y_noised = y_noised[:N]
 
-vmap_log_ratio_theta_i = vmap(single_sample_log_ratio, (None, None, 0, None, None))
+vmap_log_ratio_theta_i = vmap(single_sample_log_ratio, (None, None, None, 0, None))
 
 log_ratios = vmap_log_ratio_theta_i(y_noised[0], d_star, theta_i, theta_s, M)
+# log_ratios = vmap_log_ratio_theta_i(y_noised.squeeze(), d_star, theta_i, theta_s, M)
 ratios = jnp.exp(log_ratios)
 mi_approximation = jnp.mean(ratios)
 print("Mutual information approximation:", mi_approximation)

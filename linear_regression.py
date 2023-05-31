@@ -26,7 +26,7 @@ import tensorflow_datasets as tfds
 from lfiax.flows.nsf import make_nsf
 from lfiax.utils.oed_losses import lf_pce_eig_scan_lin_reg
 from lfiax.utils.simulators import sim_linear_data_vmap, sim_linear_data_vmap_theta
-# from lfiax.utils.utils import jax_lexpand
+from lfiax.utils.utils import standard_scale, inverse_standard_scale
 
 from typing import (
     Any,
@@ -56,30 +56,6 @@ def make_lin_reg_prior():
     return prior
 
 
-@jax.jit
-def standard_scale(x):
-    def single_column_fn(x):
-        mean = jnp.mean(x)
-        std = jnp.std(x) + 1e-10
-        return (x - mean) / std
-        
-    def multi_column_fn(x):
-        mean = jnp.mean(x, axis=0, keepdims=True)
-        std = jnp.std(x, axis=0, keepdims=True) + 1e-10
-        return (x - mean) / std
-        
-    scaled_x = jax.lax.cond(
-        x.shape[-1] == 1,
-        single_column_fn,
-        multi_column_fn,
-        x
-    )
-    return scaled_x
-
-@jax.jit
-def inverse_standard_scale(scaled_x, shift, scale):
-    return (scaled_x + shift) * scale
-
 class Workspace:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -101,7 +77,7 @@ class Workspace:
         
         eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
         file_name = f"eig_lambda_{eig_lambda_str}"
-        self.subdir = os.path.join(os.getcwd(), "icml_linear", 'pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
+        self.subdir = os.path.join(os.getcwd(), "testy", 'pce_lin_reg', file_name, str(cfg.designs.num_xi), str(cfg.seed), current_time_str)
         os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
@@ -146,13 +122,6 @@ class Workspace:
         mlp_num_layers = self.cfg.flow_params.mlp_num_layers
         hidden_size = self.cfg.flow_params.mlp_hidden_size
         num_bins = self.cfg.flow_params.num_bins
-
-        # vi flow's parameters
-        vi_flow_num_layers = self.cfg.vi_flow_params.num_layers
-        vi_mlp_num_layers = self.cfg.vi_flow_params.mlp_num_layers
-        vi_hidden_size = self.cfg.vi_flow_params.mlp_hidden_size
-        vi_num_bins = self.cfg.vi_flow_params.num_bins
-        self.vi_samples = self.cfg.vi_flow_params.vi_samples
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
