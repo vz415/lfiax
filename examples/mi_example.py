@@ -21,19 +21,19 @@ def make_lin_reg_prior():
     return prior
 
 # Constants
-N = 10
-M = 10
-KDE_SAMPLES = 100
-D = 1  # Number of independent measurements
+N = 5000
+M = 500
+KDE_SAMPLES = 1000
+D = 2  # Number of independent measurements
 SEED = 420
 
 # Generate d* values
 key = jrandom.PRNGKey(SEED)
 key, subkey = jrandom.split(key)
-# d_star = jrandom.normal(subkey, (D, 1))
+d_star = jrandom.normal(subkey, (D, 1))
 # d_star = jrandom.uniform(subkey, shape=(1,D), minval=-10, maxval=10)
 # d_star = jrandom.normal(subkey, (D,))
-d_star = jnp.array([[10.]])
+# d_star = jnp.array([[7.]])
 
 # Generate θ(i) and θ(s) samples
 key, subkey = jrandom.split(key)
@@ -51,14 +51,13 @@ theta_i = priors[:N]
 theta_s = priors[N:]
 
 # y_noised, priors, y, sigma = sim_linear_data_vmap(d_star, num_samples, subkey)
-y_noised, _, _ = sim_linear_data_vmap_theta(d_star, theta_i, next(prng_seq))
-
+y_noised, _, _ = sim_linear_data_vmap_theta(d_star.T, theta_i, next(prng_seq))
 
 # Generate ε and ν samples for KDE
 key, subkey = jrandom.split(key)
-epsilon_samples = jrandom.normal(subkey, (KDE_SAMPLES,D))
+epsilon_samples = jrandom.normal(subkey, (KDE_SAMPLES,1))
 key, subkey = jrandom.split(key)
-nu_samples = distrax.Gamma(2.0, 0.5).sample(seed=subkey, sample_shape=(KDE_SAMPLES,D))
+nu_samples = distrax.Gamma(2.0, 0.5).sample(seed=subkey, sample_shape=(KDE_SAMPLES,1))
 
 # Compute custom KDE using JAX primitives
 p_noise_samples = epsilon_samples + nu_samples
@@ -67,69 +66,31 @@ p_noise_samples = epsilon_samples + nu_samples
 kde = gaussian_kde(p_noise_samples.T)
 
 @jax.jit
-def p_yj_given_dj_theta_vmap(yj, dj, theta0, theta1):
-    # breakpoint()
-    has_batch_dim = False
-    if hasattr(theta0, 'batch_dim'):
-        # has_batch_dim = True
-        # return kde.logpdf(yj - (theta1 + theta0 * dj))
-        reshaped_term = jnp.reshape(yj - (theta1 + theta0 * dj), (-1,1))
-        jax.debug.print("🤯 {x} 🤯", x=reshaped_term)
-        breakpoint()
-        return kde.logpdf(reshaped_term)
-    # if has_batch_dim:
-    # breakpoint()
-    return kde.logpdf(yj.T - (theta1[:,None] + theta0[:,None] * dj))
-        # theta0 = theta0.val
-        # theta1 = theta1.val
-#     # return kde.logpdf(yj - (theta1[:,None] + theta0[:,None] * dj))
-#     # return kde.logpdf(yj - (theta1 + theta0 * dj))
-
-
-# def single_sample_log_ratio(y_sample, d_star, theta_i_single, theta_s, M):
-#     log_p_y_i_theta_i = jnp.sum(
-#         p_yj_given_dj_theta_vmap(y_sample, d_star, theta_i_single[0], theta_i_single[1])
-#     )
-#     log_p_y_i_theta_s = jax.scipy.special.logsumexp(
-#         p_yj_given_dj_theta_vmap(
-#             y_sample[:, None], d_star, theta_s[:, 0], theta_s[:, 1]
-#             # y_sample, d_star, theta_s[:, 0], theta_s[:, 1]
-#         ),
-#         axis=0,
-#     ) - jnp.log(M)
-#     return log_p_y_i_theta_i - log_p_y_i_theta_s
-
-@jax.jit
 def p_yj_given_dj_theta(yj, dj, theta0, theta1):
     return kde.logpdf(yj - (theta1 + theta0 * dj))
 
-def single_sample_log_ratio(y_sample, d_star, theta_i_single, theta_s, M):
-    # Adding vmap here to handle multiple y_sample values
-    p_yj_given_dj_theta_vmap = vmap(p_yj_given_dj_theta, (0, None, None, None))
-    d_star_broadcasted = jnp.repeat(d_star, len(y_sample), axis=0)
 
-    log_p_y_i_theta_i = jnp.sum(
-        p_yj_given_dj_theta_vmap(y_sample, d_star_broadcasted, theta_i_single[0], theta_i_single[1])
-    )
+def single_sample_log_ratio(y_sample, d_star, theta0_i, theta1_i, theta0_s, theta1_s):
+    kde_log_probs_d_star = vmap(p_yj_given_dj_theta, (0, 0, None, None))
+    num_val = jnp.sum(kde_log_probs_d_star(y_sample, d_star, theta0_i, theta1_i))
+
+    kde_log_probs_d_star_theta_s = vmap(kde_log_probs_d_star, (None, None, 0, 0))
+    log_probs_matrix = kde_log_probs_d_star_theta_s(y_sample, d_star, theta0_s, theta1_s)
+    log_prob_array = jnp.sum(log_probs_matrix, axis=1)
+    denom_val = jax.scipy.special.logsumexp(log_prob_array) - jnp.log(M)
     
-    log_p_y_i_theta_s = jax.scipy.special.logsumexp(
-        p_yj_given_dj_theta_vmap(
-            # y_sample[:, None], d_star, theta_s[:, 0], theta_s[:, 1]
-            y_sample[:, None], d_star, theta_s[0], theta_s[1]
-        ),
-        axis=0,
-    ) - jnp.log(M)
-    return log_p_y_i_theta_i - log_p_y_i_theta_s
+    return num_val - denom_val
 
-
-# print(y_noised.shape)
 # y_noised = y_noised.squeeze(0)[:N]
-y_noised = y_noised[:N]
+if D == 1:
+    y_noised = y_noised[:N].squeeze(0)
 
-vmap_log_ratio_theta_i = vmap(single_sample_log_ratio, (None, None, None, 0, None))
+# Define vmap over theta_i and y_noised
+vmap_log_ratio = vmap(single_sample_log_ratio, in_axes=(0, None, 0, 0, None, None))
 
-log_ratios = vmap_log_ratio_theta_i(y_noised[0], d_star, theta_i, theta_s, M)
-# log_ratios = vmap_log_ratio_theta_i(y_noised.squeeze(), d_star, theta_i, theta_s, M)
-ratios = jnp.exp(log_ratios)
-mi_approximation = jnp.mean(ratios)
+# Call the function like so:
+log_ratios = vmap_log_ratio(y_noised, d_star, theta_i[:, 0], theta_i[:, 1], theta_s[:,0], theta_s[:,1])
+
+mi_approximation = jnp.mean(log_ratios)
+
 print("Mutual information approximation:", mi_approximation)
