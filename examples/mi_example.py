@@ -69,7 +69,6 @@ kde = gaussian_kde(p_noise_samples.T)
 def p_yj_given_dj_theta(yj, dj, theta0, theta1):
     return kde.logpdf(yj - (theta1 + theta0 * dj))
 
-
 def single_sample_log_ratio(y_sample, d_star, theta0_i, theta1_i, theta0_s, theta1_s):
     kde_log_probs_d_star = vmap(p_yj_given_dj_theta, (0, 0, None, None))
     num_val = jnp.sum(kde_log_probs_d_star(y_sample, d_star, theta0_i, theta1_i))

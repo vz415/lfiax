@@ -135,7 +135,6 @@ def plot_prior_posteriors(prior_samples, posterior_samples, posterior_samples1, 
     plt.savefig(filename, dpi=900, bbox_inches='tight')
 
 
-
 def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename):
     # Create a figure with two subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
