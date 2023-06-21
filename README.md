@@ -1,5 +1,5 @@
 <div align="center">
-<img src="docs/_static/scaled_lfiax.png" width="350" alt="logo"/>
+<img src="scaled_lfiax.png" width="350" alt="logo"/>
 </div>
 
 # LFIAX
