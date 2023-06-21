@@ -1,0 +1,87 @@
+defaults:
+  - override hydra/launcher: submitit_slurm
+  - override hydra/sweeper: nevergrad
+
+version: '0.0.1'
+
+seed: 8
+
+wandb:
+  entity: vz_uci
+  project: lfiax_linReg_lf-pce_bugfix
+
+contrastive_sampling:
+  M: 100
+  N: 10
+
+designs:
+  d: null # [10.] # [-5., -2.5, 0., 2.5, 5., .1, .2, .3, .4, 0.01] #  # [0.] # 0. # null
+  xi: [0.]
+  num_xi: 1
+
+param_shapes:
+  theta_shape: 2
+  event_dim: 1
+
+flow_params:
+  num_layers: 5
+  mlp_num_layers: 4
+  mlp_hidden_size: 128
+  num_bins: 4
+
+vi_flow_params:
+  num_layers: 5
+  mlp_num_layers: 4
+  mlp_hidden_size: 128
+  num_bins: 4
+  vi_samples: 100
+
+optimization_params:
+  # TODO: Make VI optimizer params
+  learning_rate: 1e-3
+  xi_learning_rate: 1e-2
+  xi_optimizer: "Adam"
+  xi_scheduler: "None"
+  training_steps: 10_000
+  xi_lr_end: 1e-3
+  lr_values: [5e-2, 1e-2, 5e-3]
+  restarts: 3
+  eig_lambda: 0.
+
+
+hydra:
+  # run:
+  sweep:
+    # TODO: Check that xi dimensionality is preserved
+    dir: ./data/${version}
+    # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
+    # subdir: ${hydra.job.num}/${seed}
+    subdir: ${hydra.job.override_dirname}
+  launcher:
+    max_num_timeout: 10
+    timeout_min: 4
+    partition: free
+    account: eehui_lab
+    # nodes: 1
+    # array_parallelism: 5
+    # ntasks: 1
+    # cpus-per-task: 1
+    # array: "1:5"
+    # mail-type: "fail, end"
+    # mail-user: "vzaballa@uci.edu"
+    # comment: ICML
+    # mem_gb: 64
+    # gpus_per_node: 1
+  sweeper:
+    optim:
+      optimizer: RandomSearch
+      budget: 4
+      num_workers: 4
+    parametrization:
+      contrastive_sampling.M: [10, 50, 100]
+      contrastive_sampling.N: [10, 50, 100]
+      optimization_params.learning_rate: [1e-1, 1e-2, 1e-3, 1e-4]
+      optimization_params.xi_learning_rate: [5e-1, 1e-1, 1e-2]
+      optimization_params.xi_optimizer: ["Adam", "SGD"]
+      optimization_params.xi_scheduler: ["Linear", "Exponential", "CosineDecay"]
+
