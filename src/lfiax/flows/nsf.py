@@ -112,7 +112,7 @@ def make_nsf(
             layer = distrax.MaskedCoupling(
                 mask=mask,
                 bijector=bijector_fn,
-                conditioner=conditioner
+                conditioner=create_conditioner()
             )
             layers.append(layer)
             # Flip the mask after each layer as long as event is non-scalar.
