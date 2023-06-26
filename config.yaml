@@ -6,10 +6,6 @@ version: '0.0.1'
 
 seed: 8
 
-wandb:
-  entity: vz_uci
-  project: lfiax_linReg_lf-pce_bugfix
-
 contrastive_sampling:
   M: 100
   N: 10
@@ -61,14 +57,12 @@ hydra:
     max_num_timeout: 10
     timeout_min: 4
     partition: free
-    account: eehui_lab
     # nodes: 1
     # array_parallelism: 5
     # ntasks: 1
     # cpus-per-task: 1
     # array: "1:5"
     # mail-type: "fail, end"
-    # mail-user: "vzaballa@uci.edu"
     # comment: ICML
     # mem_gb: 64
     # gpus_per_node: 1

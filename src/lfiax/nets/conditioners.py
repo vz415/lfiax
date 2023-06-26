@@ -23,19 +23,29 @@ def conditioner_mlp(
                 for i, hidden in enumerate(hidden_sizes):
                     x_temp = hk.nets.MLP(
                         [hidden],
-                        w_init=hk.initializers.VarianceScaling(2.0, "fan_in", "truncated_normal"),
-                        activate_final=True)(x)
-                    if i > 0: 
+                        w_init=hk.initializers.VarianceScaling(
+                            2.0, "fan_in", "truncated_normal"
+                        ),
+                        activate_final=True,
+                    )(x)
+                    if i > 0:
                         x += x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
-                    else: 
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
+                    else:
                         x = x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
             else:
                 x = hk.nets.MLP(
                     hidden_sizes,
-                    w_init=hk.initializers.VarianceScaling(2.0, "fan_in", "truncated_normal"),
-                    activate_final=True)(x)
+                    w_init=hk.initializers.VarianceScaling(
+                        2.0, "fan_in", "truncated_normal"
+                    ),
+                    activate_final=True,
+                )(x)
                 x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
             x = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
@@ -63,15 +73,15 @@ def conditional_conditioner_mlp(
             if standardize_theta:
                 # Normalize the conditioned values
                 theta = jnp.divide(
-                    jnp.subtract(theta, jnp.mean(theta, axis=0)), 
-                    jnp.std(theta, axis=0) + 1e-10
-                    )
+                    jnp.subtract(theta, jnp.mean(theta, axis=0)),
+                    jnp.std(theta, axis=0) + 1e-10,
+                )
                 # TODO: Move log_prob to stateful transform to use this ewma stateful function
                 # theta = hk.BatchNorm(
-                #     create_scale=True, 
+                #     create_scale=True,
                 #     create_offset=True,
                 #     decay_rate=0.99)(theta, is_training=True)
-            
+
             # x = hk.Flatten(preserve_dims=-len(event_shape))(jnp.abs(x))
             x = hk.Flatten(preserve_dims=-len(event_shape))(x)
             theta = hk.Flatten()(theta)
@@ -82,19 +92,29 @@ def conditional_conditioner_mlp(
                 for i, hidden in enumerate(hidden_sizes):
                     x_temp = hk.nets.MLP(
                         [hidden],
-                        w_init=hk.initializers.VarianceScaling(2.0, "fan_in", "truncated_normal"),
-                        activate_final=True)(x)
-                    if i > 0: 
+                        w_init=hk.initializers.VarianceScaling(
+                            2.0, "fan_in", "truncated_normal"
+                        ),
+                        activate_final=True,
+                    )(x)
+                    if i > 0:
                         x += x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
-                    else: 
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
+                    else:
                         x = x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
             else:
                 x = hk.nets.MLP(
                     hidden_sizes,
-                    w_init=hk.initializers.VarianceScaling(2.0, "fan_in", "truncated_normal"),
-                    activate_final=True)(x)
+                    w_init=hk.initializers.VarianceScaling(
+                        2.0, "fan_in", "truncated_normal"
+                    ),
+                    activate_final=True,
+                )(x)
                 x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
             x = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,

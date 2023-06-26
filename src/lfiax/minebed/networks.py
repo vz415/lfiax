@@ -67,7 +67,7 @@ class FullyConnected(nn.Module):
             fc = nn.Linear(H[-1], 1)
             self.layers.append(fc)
         else:
-            raise ValueError('Incorrect value for number of layers.')
+            raise ValueError("Incorrect value for number of layers.")
 
     def forward(self, var1, var2):
         """

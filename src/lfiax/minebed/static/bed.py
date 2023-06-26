@@ -43,8 +43,8 @@ class BED:
     """
 
     def __init__(
-            self, model, optimizer, scheduler,
-            simulator, prior, y_obs, LB_type='NWJ'):
+        self, model, optimizer, scheduler, simulator, prior, y_obs, LB_type="NWJ"
+    ):
 
         self.model = model
         self.optimizer = optimizer
@@ -121,9 +121,21 @@ class GradientFreeBED(BED):
     """
 
     def __init__(
-            self, model, optimizer, scheduler, simulator, prior,
-            domain, n_epoch, batch_size, ma_window=100,
-            constraints=None, y_obs=None, LB_type='NWJ', save_models=False):
+        self,
+        model,
+        optimizer,
+        scheduler,
+        simulator,
+        prior,
+        domain,
+        n_epoch,
+        batch_size,
+        ma_window=100,
+        constraints=None,
+        y_obs=None,
+        LB_type="NWJ",
+        save_models=False,
+    ):
         """
         Parameters
         ----------
@@ -167,7 +179,8 @@ class GradientFreeBED(BED):
         """
 
         super(GradientFreeBED, self).__init__(
-            model, optimizer, scheduler, simulator, prior, LB_type, y_obs)
+            model, optimizer, scheduler, simulator, prior, LB_type, y_obs
+        )
 
         self.domain = domain
         self.constraints = constraints
@@ -215,7 +228,7 @@ class GradientFreeBED(BED):
 
     def _objective(self, d):
         """Objective function to be maximised during Bayesian Optimisation."""
-        
+
         # reset model, optimizer and scheduler
         self._reset_model()
         self._reset_optimizer()
@@ -225,14 +238,13 @@ class GradientFreeBED(BED):
         Y = self.simulator(d, self.prior)
         if self.y_obs is None:
             train_data = (self.prior, Y)
-        else:    
+        else:
             y_obs = np.broadcast_to(self.y_obs, (Y.shape[0], self.y_obs.shape[1]))
-            Y = np.concatenate((Y, y_obs),axis=1)
+            Y = np.concatenate((Y, y_obs), axis=1)
             train_data = (self.prior, Y)
 
         # initialize MINE object and optimizer, scheduler
-        self.mine_obj = mm.MINE(
-            self.model, train_data, LB_type=self.LB_type)
+        self.mine_obj = mm.MINE(self.model, train_data, LB_type=self.LB_type)
         self.mine_obj.set_optimizer(self.optimizer)
         self.mine_obj.set_scheduler(self.scheduler)
 
@@ -240,22 +252,27 @@ class GradientFreeBED(BED):
         self.mine_obj.train(self.n_epoch, self.batch_size, bar=False)
 
         # compute the moving average of all evaluations
-        lb_ma = self.mine_obj._ma(
-            self.mine_obj.train_lb,
-            window=self.ma_window)
+        lb_ma = self.mine_obj._ma(self.mine_obj.train_lb, window=self.ma_window)
 
         # compute the last moving average
         lb_final_ma = lb_ma[-1]
 
         # store data for analysis
         self._store_data(lb_ma)
-        
+
         return lb_final_ma
 
     def train(
-            self, bo_model=None, bo_space=None, bo_acquisition=None,
-            X_init=None, Y_init=None, BO_init_num=5, BO_max_num=20,
-            verbosity=False):
+        self,
+        bo_model=None,
+        bo_space=None,
+        bo_acquisition=None,
+        X_init=None,
+        Y_init=None,
+        BO_init_num=5,
+        BO_max_num=20,
+        verbosity=False,
+    ):
         """
         Uses Bayesian optimisation to find the optimal design. The objective
         function is the mutual information lower bound at a particular design,
@@ -281,31 +298,36 @@ class GradientFreeBED(BED):
         """
 
         if verbosity:
-            print('Initialize Probabilistic Model')
+            print("Initialize Probabilistic Model")
 
         if bo_model and bo_space and bo_acquisition:
-            raise NotImplementedError('Custom BO model not yet implemented.')
+            raise NotImplementedError("Custom BO model not yet implemented.")
         elif all(v is None for v in [bo_model, bo_space, bo_acquisition]):
             pass
         else:
-            raise ValueError(
-                'Either all BO arguments or none need to be specified.')
+            raise ValueError("Either all BO arguments or none need to be specified.")
 
         # Define GPyOpt Bayesian Optimization object
         self.bo_obj = BayesianOptimization(
-            f=self._objective, domain=self.domain,
-            constraints=self.constraints, model_type='GP',
-            acquisition_type='EI', normalize_Y=False,
-            initial_design_numdata=BO_init_num, acquisition_jitter=0.01,
-            maximize=True, X=X_init, Y=Y_init)
+            f=self._objective,
+            domain=self.domain,
+            constraints=self.constraints,
+            model_type="GP",
+            acquisition_type="EI",
+            normalize_Y=False,
+            initial_design_numdata=BO_init_num,
+            acquisition_jitter=0.01,
+            maximize=True,
+            X=X_init,
+            Y=Y_init,
+        )
         # TODO: Implement a more modular approach with GPy model as input.
 
         if verbosity:
-            print('Start Bayesian Optimisation')
+            print("Start Bayesian Optimisation")
 
         # run the bayesian optimisation
-        self.bo_obj.run_optimization(
-            max_iter=BO_max_num, verbosity=verbosity, eps=1e-5)
+        self.bo_obj.run_optimization(max_iter=BO_max_num, verbosity=verbosity, eps=1e-5)
 
         # find optimal design from posterior GP model; stored as d_opt
         self._compute_optimal_design(self.bo_obj)
@@ -335,12 +357,11 @@ class GradientFreeBED(BED):
         self._reset_scheduler()
 
         # simulate data
-        Y = self.simulator(self.d_opt[None,:], self.prior)
+        Y = self.simulator(self.d_opt[None, :], self.prior)
         train_data = (self.prior, Y)
 
         # initialize MINE object and optimizer, scheduler
-        self.mine_obj_final = mm.MINE(
-            self.model, train_data, LB_type=self.LB_type)
+        self.mine_obj_final = mm.MINE(self.model, train_data, LB_type=self.LB_type)
         self.mine_obj_final.set_optimizer(self.optimizer)
         self.mine_obj_final.set_scheduler(self.scheduler)
 
@@ -349,8 +370,8 @@ class GradientFreeBED(BED):
 
         # compute the moving average of all evaluations
         lb_ma = self.mine_obj_final._ma(
-            self.mine_obj_final.train_lb,
-            window=self.ma_window)
+            self.mine_obj_final.train_lb, window=self.ma_window
+        )
 
         # store data for analysis
         self._store_data(lb_ma)
@@ -375,19 +396,19 @@ class GradientFreeBED(BED):
 
         # collect internal data for saving
         internal_data = {
-            'model_final': self.model.state_dict(),
-            'optimizer_final': self.optimizer.state_dict(),
-            'scheduler_final': self.scheduler.state_dict(),
-            'models_training': self.model_states,
-            'training_curves': self.train_curves,
-            'BO_X_eval': self.bo_obj.X,
-            'BO_Y_eval': self.bo_obj.Y,
-            'd_opt': self.d_opt,
-            'GP_params': self.bo_obj.model.model.param_array}
+            "model_final": self.model.state_dict(),
+            "optimizer_final": self.optimizer.state_dict(),
+            "scheduler_final": self.scheduler.state_dict(),
+            "models_training": self.model_states,
+            "training_curves": self.train_curves,
+            "BO_X_eval": self.bo_obj.X,
+            "BO_Y_eval": self.bo_obj.Y,
+            "d_opt": self.d_opt,
+            "GP_params": self.bo_obj.model.model.param_array,
+        }
 
         # add external data
         data = dict(internal_data, **extra_data)
 
         # save as a binary file
-        torch.save(data, '{}.pt'.format(filename))
-
+        torch.save(data, "{}.pt".format(filename))

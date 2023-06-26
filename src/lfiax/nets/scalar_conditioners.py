@@ -21,15 +21,19 @@ def scalar_conditioner_mlp(
             if resnet:
                 for i, hidden in enumerate(hidden_sizes):
                     x_temp = hk.nets.MLP([hidden], activate_final=True)(x)
-                    if i > 0: 
+                    if i > 0:
                         x += x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
-                    else: 
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
+                    else:
                         x = x_temp
-                        x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+                        x = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(x)
             else:
                 x = hk.nets.MLP(hidden_sizes, activate_final=True)(x)
-            
+
             x = hk.Linear(
                 np.prod(event_shape) * num_bijector_params,
                 w_init=jnp.zeros,
@@ -55,9 +59,9 @@ def conditional_scalar_conditioner_mlp(
             """z represents the conditioned values."""
             if standardize_theta:
                 theta = jnp.divide(
-                    jnp.subtract(theta, jnp.mean(theta, axis=0)), 
-                    jnp.std(theta, axis=0) + 1e-10
-                    )
+                    jnp.subtract(theta, jnp.mean(theta, axis=0)),
+                    jnp.std(theta, axis=0) + 1e-10,
+                )
                 # TODO: implement BatchNorm & dropout by creating stateful function
                 # theta = hk.BatchNorm(theta)
             theta = hk.Flatten()(theta)
@@ -68,12 +72,16 @@ def conditional_scalar_conditioner_mlp(
             if resnet:
                 for i, hidden in enumerate(hidden_sizes):
                     z_temp = hk.nets.MLP([hidden], activate_final=True)(z)
-                    if i > 0: 
+                    if i > 0:
                         z += z_temp
-                        z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(z)
-                    else: 
+                        z = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(z)
+                    else:
                         z = z_temp
-                        z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(z)
+                        z = hk.LayerNorm(
+                            axis=-1, create_scale=True, create_offset=True
+                        )(z)
             else:
                 z = hk.nets.MLP(hidden_sizes, activate_final=True)(z)
             z = hk.Linear(
@@ -87,4 +95,3 @@ def conditional_scalar_conditioner_mlp(
             return z
 
     return ScalarConditionerModule()
-

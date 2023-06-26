@@ -24,16 +24,16 @@ def sim_linear_prior(num_samples: int, key: PRNGKey):
     mu = jnp.zeros(theta_shape)
     sigma = (3**2) * jnp.ones(theta_shape)
 
-    base_distribution = distrax.Independent(
-        distrax.MultivariateNormalDiag(mu, sigma)
-    )
+    base_distribution = distrax.Independent(distrax.MultivariateNormalDiag(mu, sigma))
 
-    samples, log_prob = base_distribution.sample_and_log_prob(seed=key, sample_shape=[num_samples])
+    samples, log_prob = base_distribution.sample_and_log_prob(
+        seed=key, sample_shape=[num_samples]
+    )
 
     return samples, log_prob
 
 
-@partial(jax.jit, static_argnums=[0,1])
+@partial(jax.jit, static_argnums=[0, 1])
 def sim_linear_prior_M_samples(num_samples: int, M: int, key: PRNGKey):
     """
     Simulate prior samples and return their log_prob.
@@ -43,11 +43,11 @@ def sim_linear_prior_M_samples(num_samples: int, M: int, key: PRNGKey):
     mu = jnp.zeros(theta_shape)
     sigma = (3**2) * jnp.ones(theta_shape)
 
-    base_distribution = distrax.Independent(
-        distrax.MultivariateNormalDiag(mu, sigma)
-    )
+    base_distribution = distrax.Independent(distrax.MultivariateNormalDiag(mu, sigma))
 
-    samples, log_prob = base_distribution.sample_and_log_prob(seed=key, sample_shape=[M, num_samples])
+    samples, log_prob = base_distribution.sample_and_log_prob(
+        seed=key, sample_shape=[M, num_samples]
+    )
 
     return samples, log_prob
 
@@ -89,7 +89,7 @@ def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
     """
     Sim linear laplace prior regression model.
 
-    Returns: 
+    Returns:
         y: scalar value, or, array of scalars.
     """
     # Keys for the appropriate functions
@@ -101,11 +101,15 @@ def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
     concentration = jnp.ones(noise_shape)
     rate = jnp.ones(noise_shape)
 
-    n_n = distrax.Gamma(concentration, rate).sample(seed=keys[0], sample_shape=[len(d), len(priors)])
+    n_n = distrax.Gamma(concentration, rate).sample(
+        seed=keys[0], sample_shape=[len(d), len(priors)]
+    )
 
     # perform forward pass
     y = jnp.broadcast_to(priors[:, 0], (len(d), len(priors)))
-    y = distrax.MultivariateNormalDiag(y, jnp.squeeze(n_n)).sample(seed=keys[1], sample_shape=())
+    y = distrax.MultivariateNormalDiag(y, jnp.squeeze(n_n)).sample(
+        seed=keys[1], sample_shape=()
+    )
 
     return y
 
@@ -137,7 +141,6 @@ def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     )
 
 
-
 @partial(jax.jit, static_argnums=1)
 def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     """
@@ -153,9 +156,7 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     mu = jnp.zeros(theta_shape)
     sigma = (3**2) * jnp.ones(theta_shape)
 
-    base_distribution = distrax.Independent(
-        distrax.MultivariateNormalDiag(mu, sigma)
-    )
+    base_distribution = distrax.Independent(distrax.MultivariateNormalDiag(mu, sigma))
 
     priors = base_distribution.sample(seed=keys[0], sample_shape=[num_samples])
 
@@ -179,13 +180,15 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
     # perform forward pass
     if d.shape[-1] == 1:
         # "d" becomes (2, 1) shape whenever passing lists.
-        y = jnp.matmul(jnp.expand_dims(priors[:,0], -1), jnp.expand_dims(d, 0))
+        y = jnp.matmul(jnp.expand_dims(priors[:, 0], -1), jnp.expand_dims(d, 0))
     else:
         # Designs are a length-2 arrays.
-        y = jnp.matmul(jnp.expand_dims(priors[:,0], -1), jnp.expand_dims(d, 0)).squeeze()
+        y = jnp.matmul(
+            jnp.expand_dims(priors[:, 0], -1), jnp.expand_dims(d, 0)
+        ).squeeze()
     y = jnp.add(jnp.expand_dims(priors[:, 1], -1), y)
     y_noised = jnp.add(y, sigma)
-    
+
     ygrads = priors[:, 1]
 
     return y_noised, priors, y, sigma
@@ -196,7 +199,7 @@ def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
     Data will be in shape (y, thetas, d). The `y` variable can vary in size.
-    
+
     Uses theta drawn from theta. Theta should be in the shape [num_samples, 2].
     """
     keys = jrandom.split(key, 2)
@@ -221,15 +224,17 @@ def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
     # perform forward pass
     if d.shape[-1] == 1:
         # "d" becomes (2, 1) shape whenever passing lists.
-        y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0))
+        y = jnp.matmul(jnp.expand_dims(theta[:, 0], -1), jnp.expand_dims(d, 0))
         # BUG: I'm not sure why this sometimes works and sometimes does not.
         # y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), d.T)
     else:
         # Designs are a length-2 arrays.
-        y = jnp.matmul(jnp.expand_dims(theta[:,0], -1), jnp.expand_dims(d, 0)).squeeze()
+        y = jnp.matmul(
+            jnp.expand_dims(theta[:, 0], -1), jnp.expand_dims(d, 0)
+        ).squeeze()
     y = jnp.add(jnp.expand_dims(theta[:, 1], -1), y)
     y_noised = jnp.add(y, sigma)
-    
+
     ygrads = theta[:, 1]
 
     return y_noised, y, sigma
@@ -261,6 +266,7 @@ def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
         (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
     )
 
+
 def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
@@ -283,4 +289,3 @@ def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     y, ygrads = sim_linear_jax(d, priors, keys[1])
 
     return y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d)))
-

@@ -25,17 +25,13 @@ class ConditionalBlock(Block):
         self._check_inverse_input_shape(y)
         return self._bijector.inverse(y, theta, xi)
 
-    def forward_log_det_jacobian(
-        self, x: Array, theta: Array, xi: Array
-    ) -> Array:
+    def forward_log_det_jacobian(self, x: Array, theta: Array, xi: Array) -> Array:
         """Computes log|det J(f)(x|z)|."""
         self._check_forward_input_shape(x)
         log_det = self._bijector.forward_log_det_jacobian(x, theta, xi)
         return math.sum_last(log_det, self._ndims)
 
-    def inverse_log_det_jacobian(
-        self, y: Array, theta: Array, xi: Array
-    ) -> Array:
+    def inverse_log_det_jacobian(self, y: Array, theta: Array, xi: Array) -> Array:
         """Computes log|det J(f^{-1})(y|z)|."""
         self._check_inverse_input_shape(y)
         log_det = self._bijector.inverse_log_det_jacobian(y, theta, xi)

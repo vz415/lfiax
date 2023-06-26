@@ -31,9 +31,7 @@ class StandardizingBijector(ScalarAffine):
         # jax.debug.breakpoint()
         return batched_scale * x + batched_shift
 
-    def forward_log_det_jacobian(
-        self, x: Array, theta: Array, xi: Array
-    ) -> Array:
+    def forward_log_det_jacobian(self, x: Array, theta: Array, xi: Array) -> Array:
         """Computes log|det J(f)(x)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, x.shape)
         # jax.debug.breakpoint()
@@ -44,9 +42,7 @@ class StandardizingBijector(ScalarAffine):
     ) -> Tuple[Array, Array]:
         """Computes y = f(x) and log|det J(f)(x)| ignoring z."""
         # jax.debug.breakpoint()
-        return self.forward(x, theta, xi), self.forward_log_det_jacobian(
-            x, theta, xi
-        )
+        return self.forward(x, theta, xi), self.forward_log_det_jacobian(x, theta, xi)
 
     def inverse(self, y: Array, theta: Array, xi: Array) -> Array:
         """Computes x = f^{-1}(y) ignoring z."""
@@ -56,9 +52,7 @@ class StandardizingBijector(ScalarAffine):
         # jax.debug.breakpoint()
         return batched_inv_scale * (y - batched_shift)
 
-    def inverse_log_det_jacobian(
-        self, y: Array, theta: Array, xi: Array
-    ) -> Array:
+    def inverse_log_det_jacobian(self, y: Array, theta: Array, xi: Array) -> Array:
         """Computes log|det J(f^{-1})(y)| ignoring z."""
         batch_shape = jax.lax.broadcast_shapes(self._batch_shape, y.shape)
         # jax.debug.breakpoint()
@@ -69,6 +63,4 @@ class StandardizingBijector(ScalarAffine):
     ) -> Tuple[Array, Array]:
         """Computes x = f^{-1}(y) and log|det J(f^{-1})(y)| ignoring z."""
         # jax.debug.breakpoint()
-        return self.inverse(y, theta, xi), self.inverse_log_det_jacobian(
-            y, theta, xi
-        )
+        return self.inverse(y, theta, xi), self.inverse_log_det_jacobian(y, theta, xi)

@@ -60,17 +60,21 @@ def prepare_data(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
 # ----------------------------
 @hk.without_apply_rng
 @hk.transform
-def log_prob(data: Array, cond_data: Array) -> Array:
+def log_prob(x: Array, theta: Array, xi: Array) -> Array:
+    """Up to user to appropriately scale their inputs :)."""
+    # TODO: Pass more nsf parameters from config.yaml
     model = make_nsf(
         event_shape=MNIST_IMAGE_SHAPE,
-        cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
-        standardize_x=False,
+        standardize_theta=True,
+        use_resnet=True,
+        conditional=True,
         base_dist="uniform",
     )
-    return model.log_prob(data, cond_data)
+
+    return model.log_prob(x, theta, xi)
 
 
 @hk.without_apply_rng
@@ -78,29 +82,34 @@ def log_prob(data: Array, cond_data: Array) -> Array:
 def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
     model = make_nsf(
         event_shape=MNIST_IMAGE_SHAPE,
-        cond_info_shape=cond_info_shape,
         num_layers=flow_num_layers,
         hidden_sizes=[hidden_size] * mlp_num_layers,
         num_bins=num_bins,
-        standardize_x=False,
+        standardize_theta=False,
         base_dist="uniform",
     )
     z = jnp.repeat(cond_data, num_samples, axis=0)
     z = jnp.expand_dims(z, -1)
-    return model._sample_n(key=key, n=[num_samples], z=z)
+    dummy_xi = jnp.array([])
+    dummy_xi = jnp.broadcast_to(dummy_xi, (num_samples, dummy_xi.shape[-1]))
+    return model._sample_n(key=key, n=[num_samples], theta=z, xi=dummy_xi)
 
 
 def loss_fn(params: hk.Params, prng_key: PRNGKey, batch: Batch) -> Array:
     data = prepare_data(batch, prng_key)
     # Loss is average negative log likelihood.
-    loss = -jnp.mean(log_prob.apply(params, data[0], data[1]))
+    dummy_xi = jnp.array([])
+    dummy_xi = jnp.broadcast_to(dummy_xi, (len(data[0]), dummy_xi.shape[-1]))
+    loss = -jnp.mean(log_prob.apply(params, data[0], data[1], dummy_xi))
     return loss
 
 
 @jax.jit
 def eval_fn(params: hk.Params, batch: Batch) -> Array:
     data = prepare_data(batch)  # We don't dequantize during evaluation.
-    loss = -jnp.mean(log_prob.apply(params, data[0], data[1]))
+    dummy_xi = jnp.array([])
+    dummy_xi = jnp.broadcast_to(dummy_xi, (len(data[0]), dummy_xi.shape[-1]))
+    loss = -jnp.mean(log_prob.apply(params, data[0], data[1], dummy_xi))
     return loss
 
 
@@ -139,6 +148,7 @@ if __name__ == "__main__":
         next(prng_seq),
         np.zeros((1, *MNIST_IMAGE_SHAPE)),
         np.zeros((1, *cond_info_shape)),
+        np.zeros((1, *(0,))),
     )
     opt_state = optimizer.init(params)
 

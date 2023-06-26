@@ -96,5 +96,5 @@ def sdm_minebed(
     )
 
     bed_obj.train(BO_init_num=BO_INIT_NUM, BO_max_num=BO_MAX_NUM, verbosity=True)
-    
+
     return bed_obj

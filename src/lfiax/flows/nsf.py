@@ -15,7 +15,10 @@ from lfiax.bijectors.standardizing_conditional import StandardizingBijector
 
 from lfiax.distributions.transformed_conditional import ConditionalTransformed
 
-from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp, conditional_scalar_conditioner_mlp
+from lfiax.nets.scalar_conditioners import (
+    scalar_conditioner_mlp,
+    conditional_scalar_conditioner_mlp,
+)
 from lfiax.nets.conditioners import conditioner_mlp, conditional_conditioner_mlp
 
 
@@ -88,7 +91,7 @@ def make_nsf(
                     standardize_theta,
                     use_resnet,
                 )
-    
+
     layers = []
 
     # Append subsequent layers
@@ -110,9 +113,7 @@ def make_nsf(
     else:
         for _ in range(num_layers):
             layer = distrax.MaskedCoupling(
-                mask=mask,
-                bijector=bijector_fn,
-                conditioner=create_conditioner()
+                mask=mask, bijector=bijector_fn, conditioner=create_conditioner()
             )
             layers.append(layer)
             # Flip the mask after each layer as long as event is non-scalar.
@@ -121,7 +122,6 @@ def make_nsf(
 
         # We invert the flow so that the `forward` method is called with `log_prob`.
         flow = distrax.Inverse(distrax.Chain(layers))
-
 
     if base_dist == "gaussian":
         mu = jnp.zeros(event_shape)

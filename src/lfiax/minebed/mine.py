@@ -49,9 +49,14 @@ class MINE:
     """
 
     def __init__(
-            self, model, data, LB_type='NWJ',
-            lr=1e-3, schedule_step=1e8, schedule_gamma=1,
-            ):
+        self,
+        model,
+        data,
+        LB_type="NWJ",
+        lr=1e-3,
+        schedule_step=1e8,
+        schedule_gamma=1,
+    ):
         """
         Parameters
         ----------
@@ -86,7 +91,8 @@ class MINE:
         self.optimizer = Adam(self.model.parameters(), lr=lr)
         # default scheduler is StepLR; may over-write
         self.scheduler = StepLR(
-            self.optimizer, step_size=schedule_step, gamma=schedule_gamma)
+            self.optimizer, step_size=schedule_step, gamma=schedule_gamma
+        )
 
     def set_optimizer(self, optimizer):
         """
@@ -115,13 +121,13 @@ class MINE:
     def _ma(self, a, window=100):
         """Computes the moving average of array a, within a 'window'"""
 
-        avg = [np.mean(a[i:i + window]) for i in range(0, len(a) - window)]
+        avg = [np.mean(a[i : i + window]) for i in range(0, len(a) - window)]
         return avg
 
     def _lower_bound(self, pj, pm):
         """Evaluates the lower bound with joint/marginal samples."""
 
-        if self.LB_type == 'NWJ':
+        if self.LB_type == "NWJ":
             # Compute the NWJ bound (also known as MINE-f)
             Z = torch.tensor(np.exp(1))
             lb = torch.mean(pj) - torch.mean(torch.exp(pm) / Z)
@@ -143,12 +149,8 @@ class MINE:
         """
 
         # Define PyTorch variables
-        x = Variable(
-            torch.from_numpy(X).type(torch.FloatTensor),
-            requires_grad=True)
-        y = Variable(
-            torch.from_numpy(Y).type(torch.FloatTensor),
-            requires_grad=True)
+        x = Variable(torch.from_numpy(X).type(torch.FloatTensor), requires_grad=True)
+        y = Variable(torch.from_numpy(Y).type(torch.FloatTensor), requires_grad=True)
 
         # Get predictions from network
         predictions = self.model(x, y)
@@ -210,7 +212,8 @@ class MINE:
 
                 # sample batches randomly
                 index = np.random.choice(
-                    range(len(self.X)), size=batch_size, replace=False)
+                    range(len(self.X)), size=batch_size, replace=False
+                )
                 x_sample = self.X[index]
                 y_sample = self.Y[index]
 
@@ -218,7 +221,7 @@ class MINE:
                 lb = self.evaluate_lower_bound(x_sample, y_sample)
 
                 # maximise lower bound
-                loss = - lb
+                loss = -lb
 
                 # save training score
                 self.train_lb.append(lb.data.numpy())
@@ -232,4 +235,3 @@ class MINE:
             self.scheduler.step()
 
         self.train_lb = np.array(self.train_lb).reshape(-1)
-

@@ -26,9 +26,9 @@ def indicator_boundaries(bounds, d):
     high = all(i >= 0 for i in check[1])
 
     if low and high:
-        ind = 1.
+        ind = 1.0
     else:
-        ind = 0.
+        ind = 0.0
 
     return np.array([[ind]])
 
@@ -84,7 +84,8 @@ def get_GP_optimum(obj):
     x, _ = optimizer.optimize(
         x0=obj.x_opt,
         f=lambda d: fun_dfun(obj, space, d)[0],
-        f_df=lambda d: fun_dfun(obj, space, d))
+        f_df=lambda d: fun_dfun(obj, space, d),
+    )
     # TODO: MULTIPLE RE-STARTS FROM PREVIOUS BEST POINTS
 
     # Round values if space is discrete
@@ -96,8 +97,7 @@ def get_GP_optimum(obj):
         # Rounding mixed things up, so need to look at neighbours
 
         # Compute neighbours to optimum
-        idx_comb = np.array(
-            list(itertools.product([-1, 0, 1], repeat=len(bounds))))
+        idx_comb = np.array(list(itertools.product([-1, 0, 1], repeat=len(bounds))))
         opt_combs = idx_comb + xtest
 
         # Evaluate
@@ -121,7 +121,7 @@ def get_GP_optimum(obj):
     return opt
 
 
-def compute_weights(model, params, y_obs, LB_type='NWJ'):
+def compute_weights(model, params, y_obs, LB_type="NWJ"):
     """
     Computes the ratios of posterior to prior distribution for a given trained
     'model' and a set of 'params'.
@@ -142,18 +142,14 @@ def compute_weights(model, params, y_obs, LB_type='NWJ'):
     """
 
     # Define PyTorch variables
-    x = Variable(
-        torch.from_numpy(params).type(torch.FloatTensor),
-        requires_grad=True)
-    y = Variable(
-        torch.from_numpy(y_obs).type(torch.FloatTensor),
-        requires_grad=True)
+    x = Variable(torch.from_numpy(params).type(torch.FloatTensor), requires_grad=True)
+    y = Variable(torch.from_numpy(y_obs).type(torch.FloatTensor), requires_grad=True)
 
     # Pass observed data and parameters through the model
     w = []
     for idx in range(len(x)):
         T = model(x[idx], y).data.numpy()
-        if LB_type == 'NWJ':
+        if LB_type == "NWJ":
             w.append(np.exp(T - 1))
         else:
             raise NotImplementedError
@@ -163,8 +159,8 @@ def compute_weights(model, params, y_obs, LB_type='NWJ'):
 
 
 def posterior_samples(
-        model, params, y_obs,
-        size=1, method='categorical', LB_type='NWJ'):
+    model, params, y_obs, size=1, method="categorical", LB_type="NWJ"
+):
     """
     Generates samples from the posterior distribution of the model parameters,
     given a real-world observation 'y_obs'.
@@ -190,7 +186,7 @@ def posterior_samples(
     """
 
     # Decide on a method to sample from the posterior
-    if method == 'categorical':
+    if method == "categorical":
 
         # Compute and normalise weights for categorical sampling
         w = compute_weights(model, params, y_obs, LB_type)
@@ -209,9 +205,7 @@ def posterior_samples(
     return samples
 
 
-def posterior_density(
-        model, params, params_densities,
-        y_obs, LB_type='NWJ'):
+def posterior_density(model, params, params_densities, y_obs, LB_type="NWJ"):
     """
     Computes the posterior density the model parameters, given a real-world
     observation 'y_obs'.

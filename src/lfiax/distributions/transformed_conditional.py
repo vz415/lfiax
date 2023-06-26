@@ -22,7 +22,11 @@ class ConditionalTransformed(Transformed):
         super().__init__(distribution, flow)
 
     def _sample_n(
-        self, key: PRNGKey, n: int, theta: Array, xi: Array,
+        self,
+        key: PRNGKey,
+        n: int,
+        theta: Array,
+        xi: Array,
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
@@ -39,7 +43,7 @@ class ConditionalTransformed(Transformed):
     def _sample_n_and_log_prob(
         self, key: PRNGKey, n: int, theta: Array, xi: Array
     ) -> Tuple[Array, Array]:
-        """Returns `n` samples and their log probs depending on conditioning 
+        """Returns `n` samples and their log probs depending on conditioning
         variables.
 
         This function is more efficient than calling `sample` and `log_prob`
