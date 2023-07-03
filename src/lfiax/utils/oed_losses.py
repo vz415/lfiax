@@ -104,23 +104,6 @@ def lf_pce_eig_scan_lin_reg(
         result = jax.lax.scan(scan_fun, conditional_lp, jnp.array(range(M)))
         return result[0]
 
-    # TODO: Use this to make gpu version
-    # def compute_marginal_lp(keys, log_prob_fun, M, N, x, conditional_lp):
-    #     # Generate M * N new prior values
-    #     theta_keys = jrandom.split(keys[0], M * N)
-    #     theta_values, _ = jax.vmap(sim_linear_prior, in_axes=(None, 0))(N, theta_keys)
-
-    #     # Calculate log_prob_fun for each theta value
-    #     log_probs = jax.vmap(log_prob_fun, in_axes=(None, None, 0, None))(flow_params, x, theta_values, xi)
-
-    #     # Concatenate conditional_lp with log_probs
-    #     all_log_probs = jnp.concatenate([conditional_lp[jnp.newaxis, :], log_probs], axis=0)
-
-    #     # Compute the marginal log probability using jnp.logsumexp
-    #     marginal_lp = jax.scipy.special.logsumexp(all_log_probs, axis=0)# - jnp.log(M * N + 1)
-
-    #     return marginal_lp
-
     keys = jrandom.split(prng_key, 1 + M)
 
     xi = jnp.broadcast_to(xi_params["xi"], (N, xi_params["xi"].shape[-1]))
@@ -140,18 +123,8 @@ def lf_pce_eig_scan_lin_reg(
         keys[1 : M + 1], log_prob_fun, M, N, scaled_x, conditional_lp
     ) - jnp.log(M + 1)
 
-    # EIG = jnp.sum(conditional_lp - marginal_lp)
     EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
 
-    # Calculate design penalty
-    # design_spread = measure_of_spread(xi_params['xi'])
-    # design_spread = jnp.mean(jnp.abs(pairwise_distances(xi_params['xi'])))
-
-    # Various loss functions tested
-    # loss = EIG
-    # loss = 0.01 * design_spread + EIG
-    # loss = 0.01 * design_spread + EIG + jnp.mean(conditional_lp)
-    # loss = jnp.mean(conditional_lp)
     loss = EIG + lam * jnp.mean(conditional_lp)
 
     return -loss, (conditional_lp, theta_0, x, x_noiseless, noise, EIG, x_mean, x_std)
@@ -279,6 +252,7 @@ def lf_ace_eig_scan(
     M: int = 10,
 ):
     """
+    *Work in progress.*
     Calculates snpe-c using a posterior and prior. Requires a posterior and prior
     estimate. Will use all three to calculate the EIG. This takes a vectorized
     approach for readability and GPU compatability.
@@ -320,51 +294,11 @@ def lf_ace_eig_scan(
 
 
 @partial(jax.jit, static_argnums=[2, 3])
-def lfi_pce_eig_fori(
-    params: hk.Params, prng_key: PRNGKey, N: int = 100, M: int = 10, **kwargs
-):
-    """
-    Calculates PCE loss using jax.lax.fori_loop to accelerate. Slightly slower than scan.
-    More readable than scan.
-    TODO: refactor arguments.
-    """
-
-    def compute_marginal(
-        M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp
-    ):
-        def loop_body_fun2(i, carry):
-            contrastive_lps = carry
-            theta, _ = sim_linear_prior(num_samples, keys[i + 1])
-            contrastive_lp = log_prob.apply(flow_params, x, theta, xi_broadcast)
-            contrastive_lps += jnp.exp(contrastive_lp)
-            return contrastive_lps
-
-        conditional_lps = jax.lax.fori_loop(0, M, loop_body_fun2, conditional_lp)
-        return jnp.log(conditional_lps)
-
-    keys = jrandom.split(prng_key, 3 + M)
-    xi = params["xi"]
-    flow_params = {k: v for k, v in params.items() if k != "xi"}
-
-    # simulate the outcomes before finding their log_probs
-    x, theta_0 = sim_linear_data_vmap(d_sim, num_samples, keys[0])
-    xi_broadcast = jnp.broadcast_to(xi, (num_samples, len(xi)))
-
-    conditional_lp = log_prob.apply(flow_params, x, theta_0, xi_broadcast)
-
-    # conditional_lp could be the initial starting state that is added upon...
-    marginal_lp = compute_marginal(
-        M, num_samples, key, flow_params, x, xi_broadcast, conditional_lp
-    ) - jnp.log(M + 1)
-
-    return -sum(conditional_lp - marginal_lp) - jnp.mean(conditional_lp)
-
-
-@partial(jax.jit, static_argnums=[2, 3])
 def lfi_pce_eig_vmap_distrax(
     params: hk.Params, prng_key: PRNGKey, N: int = 100, M: int = 10, **kwargs
 ):
     """
+    *Work in progress.*
     Calculates PCE loss using vmap inherent to `distrax` distributions. May be faster
     than scan on GPUs.
     TODO: refactor arguments.
@@ -403,6 +337,7 @@ def lfi_pce_eig_vmap_manual(
     params: hk.Params, prng_key: PRNGKey, N: int = 100, M: int = 10, **kwargs
 ):
     """
+    *Work in progress.*
     Calculates PCE loss using explicit vmap of `distrax` distributions. May potentially
     be more stable than using `ditrax` implicit version as of 2/9/23. May be faster
     than scan on GPUs.
