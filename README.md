@@ -22,6 +22,8 @@ pip install -e .
 We show how to use the `log_prob` and `sample` methods from lfiax on MNIST density estimation and sampling.Notice that the base distirbution is uniform and that the wrapped distrax model distribution takes the data x, parameters theta, and conditional designs xi. We can ignore the xi argument and the network will still work.
 
 ```python
+from lfiax.flows.nsf import make_nsf
+
 @hk.without_apply_rng
 @hk.transform
 def log_prob(x: Array, theta: Array, xi: Array) -> Array:
@@ -44,6 +46,8 @@ def log_prob(x: Array, theta: Array, xi: Array) -> Array:
 To sample from the learned MNIST density, use the following function. It uses the same function but samples and places a dummy variable for the unused xi argument.
 
 ```python
+from lfiax.flows.nsf import make_nsf
+
 @hk.without_apply_rng
 @hk.transform
 def model_sample(key: PRNGKey, num_samples: int, cond_data: Array) -> Array:
