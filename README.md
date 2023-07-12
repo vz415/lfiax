@@ -71,5 +71,3 @@ See the MNIST example file for more details.
 ## Contributing
 
 Contributions are welcome. Please open issues if anything isn't working as expected or you would like to see new/expanded features.
-
-Contributions are welcome. Please open issues if anything isn't working as expected or you would like to see new/expanded features.
