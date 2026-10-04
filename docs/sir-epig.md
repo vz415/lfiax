@@ -45,14 +45,11 @@ identical to the historical dataset unless the original random state is availabl
 
 For an existing compatible iDAD/LFiax dataset, skip generation and pass its path
 as `data.observations=/absolute/path/to/observations.pt`. The default setup uses
-R0=8 observations; the legacy `experiment.sir_type` field does not choose a dataset.
+R0=8 observations, selected through `data.observations`.
 Only load trusted Torch/pickle files.
 
 Training and posterior-predictive trajectories are generated online on the
 100,000-point training grid. A precomputed prior pickle is **not required**.
-Legacy debug mode optionally accepts `experiment.debug=true data.prior_pool=...`;
-that pickle must contain `ts` as a CPU Torch tensor, `final_ys` with shape
-(time, samples), and paired `theta_0` with shape (samples, 2).
 
 ## Run
 
@@ -72,18 +69,24 @@ inference/diagnostics):
 ```bash
 python sir.py experiment.design_rounds=1 \
   optimization_params.training_steps=20 \
-  optimization_params.refine_likelihood_rounds=1 \
   contrastive_sampling.N=16 contrastive_sampling.M=15 \
   epig.num_candidates=32 epig.num_particles=2 \
   experiment.posterior_pool_size=64 \
-  mcmc_params.num_adapt_steps=100 mcmc_params.num_mcmc_samples=100
+  mcmc_params.num_adapt_steps=100
 ```
 
 EPIG requires positive dropout, M < N, and N <= candidates <= posterior pool size.
-The loop includes posterior refinement and LC2ST diagnostics, so even a short
+The loop includes posterior inference and LC2ST diagnostics, so even a short
 training run can take time. Outputs are saved under `sir/eig_lambda_.../`; Hydra
 also writes logs under `data/`. Generated data and outputs are ignored by Git.
 To log to your W&B account, set `wandb.use_wandb=true wandb.entity=YOUR_ENTITY`.
 
-This release is intended for exploration. It has basic port checks rather than
-full experiment/result validation.
+The port includes the design-distribution LF-PCE objective and its EPIG helpers.
+Unused SBI/SBC losses, ACE updates, design importance sampling, and the abandoned
+posterior-flow/refinement configuration are omitted.
+
+Installation was checked with `pip install -e '.[sir]'` in a fresh Python 3.11
+environment on Apple Silicon macOS, followed by `pip check`, SIR imports, Hydra
+config loading, the data-generator CLI, and one synthetic design-distribution
+plus EPIG update. Linux/CUDA installation and full
+experiment results have not been validated. This release is intended for exploration.

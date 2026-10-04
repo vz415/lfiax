@@ -4,45 +4,34 @@ import wandb
 import os
 import csv
 import time
-import itertools
 import pickle as pkl
 import warnings
-from tqdm import tqdm
 from collections import deque
 import matplotlib.pyplot as plt
 
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import blackjax
 
 import torch
 
 import numpy as np
-from functools import partial
 import optax
-import distrax
 import haiku as hk
 
 from sbi.diagnostics.lc2st import LC2ST
 
 from lfiax.flows.nsf import make_nsf
-from lfiax.utils.oed_losses import lf_pce_design_dist_sir
 from lfiax.utils.simulators import simulate_sir, sample_lognormal_with_log_probs, lognormal_log_prob, collect_sufficient_sde_samples_prior
-from lfiax.utils.utils import run_mcmc, run_mcmc_smc, shuffle_samples, split_data_for_validation_jax, prior_to_standard_normal, prior_lp_logdetjac
-from lfiax.utils.sbi_losses import kl_sbc_loss_fn_general, kl_loss_fn_general
+from lfiax.utils.utils import run_mcmc, prior_to_standard_normal
 from lfiax.utils.sir_utils import LossSmoother, reduce_on_plateau
 from lfiax.utils.update_funs import update_pce
 
 
 from typing import (
     Any,
-    Iterator,
     Mapping,
-    Optional,
-    Tuple,
-    Callable,
-    NamedTuple
+    Callable
 )
 
 Array = jnp.ndarray
@@ -50,26 +39,6 @@ PRNGKey = Array
 Batch = Mapping[str, np.ndarray]
 OptState = Any
 
-@jax.jit
-def normalize_xi_to_gaussian(x):
-    scaled_x = x / 100.0
-    # Apply probit function (inverse normal CDF)
-    normalized_x = jax.scipy.stats.norm.ppf(scaled_x)
-    return normalized_x
-
-@jax.jit
-def inverse_normalize_xi(normalized_x):
-    # Inverse of the probit function (normal CDF)
-    scaled_x = jax.scipy.stats.norm.cdf(normalized_x)
-    # Rescale back to original range
-    x = scaled_x * 100.0
-    return x
-
-def compute_average_norm(grads):
-    norms = jax.tree_util.tree_map(jnp.linalg.norm, grads)
-    flat_norms = jax.tree_util.tree_leaves(norms)
-    average_norm = jnp.mean(jnp.array(flat_norms))
-    return average_norm
 
 def check_for_nans(param_dict):
     def is_nan(x):
@@ -97,41 +66,21 @@ class Workspace:
 
         # Number of design rounds to perform optimization
         self.design_rounds = self.cfg.experiment.design_rounds
-        self.refine_rounds = self.cfg.experiment.refine_rounds
         self.posterior_pool_size = self.cfg.experiment.posterior_pool_size
-        self.sbi_train_steps = self.cfg.experiment.sbi_train_steps
-        self.sir_type = self.cfg.experiment.sir_type
         self.device = self.cfg.experiment.device
-        self.hpc = self.cfg.experiment.hpc
-        self.debug = self.cfg.experiment.debug
 
-        if self.hpc:
-            self.work_dir = "/pub/vzaballa/lfiax_data"
-            print(f'workspace: {self.work_dir}')
+        self.work_dir = os.getcwd()
+        print(f'workspace: {self.work_dir}')
 
-            current_time = time.localtime()
-            current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
+        current_time = time.localtime()
+        current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
 
-            eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
-            file_name = self.sir_type
-            path_parts = [self.work_dir, "sir", file_name]
-            path_parts.extend([str(cfg.seed), current_time_str])
-            self.subdir = os.path.join(*path_parts)
-            os.makedirs(self.subdir, exist_ok=True)
-        else:
-            # Work around since hydra logging is erring
-            self.work_dir = os.getcwd()
-            print(f'workspace: {self.work_dir}')
-
-            current_time = time.localtime()
-            current_time_str = f"{current_time.tm_year}.{current_time.tm_mon:02d}.{current_time.tm_mday:02d}.{current_time.tm_hour:02d}.{current_time.tm_min:02d}"
-
-            eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
-            file_name = f"eig_lambda_{eig_lambda_str}"
-            path_parts = [os.getcwd(), "sir", file_name]
-            path_parts.extend([str(cfg.designs.num_xi), str(cfg.seed), current_time_str])
-            self.subdir = os.path.join(*path_parts)
-            os.makedirs(self.subdir, exist_ok=True)
+        eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
+        file_name = f"eig_lambda_{eig_lambda_str}"
+        path_parts = [os.getcwd(), "sir", file_name]
+        path_parts.extend([str(cfg.designs.num_xi), str(cfg.seed), current_time_str])
+        self.subdir = os.path.join(*path_parts)
+        os.makedirs(self.subdir, exist_ok=True)
 
         self.seed = self.cfg.seed
 
@@ -139,7 +88,6 @@ class Workspace:
         self.xi_stddev = self.cfg.designs.xi_stddev
         self.d = None
         self.static_outputs_sbi = None
-        self.use_design_dist = self.cfg.designs.use_design_dist
 
         # NOTE: Use prod likelihood for SIR (just 1D anyways)
         # Bunch of event shapes needed for various functions
@@ -149,7 +97,6 @@ class Workspace:
         self.theta_shape = (2,)
         # self.EVENT_SHAPE = (self.d_sim.shape[-1],)
         self.EVENT_SHAPE = (1,)
-        EVENT_DIM = self.cfg.param_shapes.event_dim
 
         # contrastive sampling parameters
         self.M = self.cfg.contrastive_sampling.M
@@ -206,13 +153,11 @@ class Workspace:
 
         # MCMC params
         self.num_adapt_steps = self.cfg.mcmc_params.num_adapt_steps
-        self.num_mcmc_samples = self.cfg.mcmc_params.num_mcmc_samples
 
         # Optimization parameters
         self.learning_rate = self.cfg.optimization_params.learning_rate
         self.xi_lr_init = self.cfg.optimization_params.xi_learning_rate
         self.training_steps = self.cfg.optimization_params.training_steps
-        self.refine_likelihood_rounds = self.cfg.optimization_params.refine_likelihood_rounds # noqa
         self.xi_optimizer = self.cfg.optimization_params.xi_optimizer
         self.xi_scheduler = self.cfg.optimization_params.xi_scheduler
         self.flow_beta2 = self.cfg.optimization_params.flow_beta2
@@ -220,23 +165,9 @@ class Workspace:
         self.xi_lr_end = self.cfg.optimization_params.xi_lr_end
         self.eig_lambda = self.cfg.optimization_params.eig_lambda
         self.ewma_smoothing = self.cfg.optimization_params.ewma_smoothing
-        self.coefficient = self.cfg.optimization_params.coefficient
-        self.tau = self.cfg.optimization_params.tau
         self.grad_clip = self.cfg.optimization_params.grad_clip
-        self.xi_grad_clip = self.cfg.optimization_params.xi_grad_clip
         self.end_sigma = self.cfg.optimization_params.end_sigma
-        self.importance_sampling = self.cfg.optimization_params.imp_sampling
-        self.y_scale = self.cfg.optimization_params.y_scale
         # Posterior optimization parameters
-        self.post_num_layers = self.cfg.post_optimization.num_layers
-        self.post_mlp_num_layers = self.cfg.post_optimization.mlp_num_layers
-        self.post_hidden_size = self.cfg.post_optimization.mlp_hidden_size
-        self.post_num_bins = self.cfg.post_optimization.num_bins
-        self.post_resnet = self.cfg.post_optimization.resnet
-        self.sbc_samples = self.cfg.post_optimization.sbc_samples
-        self.sbc_lambda = self.cfg.post_optimization.sbc_lam
-        self.vi_steps = self.cfg.post_optimization.vi_steps
-        self.vi_samples = self.cfg.post_optimization.vi_samples
 
         # Scheduler params
         self.patience = self.cfg.xi_scheduler.patience
@@ -291,12 +222,7 @@ class Workspace:
             )
             # Since base is gaussian, transform from lognormal to normal
             log_x = jnp.log(x + 1e-8)
-            if self.cfg.designs.norm_type == "ppf":
-                norm_xi = normalize_xi_to_gaussian(xi)
-            elif self.cfg.designs.norm_type == "log":
-                norm_xi = jnp.log(xi)
-            else:
-                raise ValueError(f"Norm type {self.cfg.designs.norm_type} not recognized. And you better normalize.")
+            norm_xi = jnp.log(xi)
             norm_theta = prior_to_standard_normal(theta)
             lps = model.log_prob(log_x, norm_theta, norm_xi)
             logdetjac = log_trans_logdetjac(x)
@@ -327,14 +253,7 @@ class Workspace:
                 spline_range_max=self.spline_range_max,
             )
             norm_theta = prior_to_standard_normal(theta)
-            if self.cfg.designs.norm_type == "ppf":
-                norm_xi = normalize_xi_to_gaussian(xi)
-            elif self.cfg.designs.norm_type == "log":
-                norm_xi = jnp.log(xi)
-            else:
-                raise ValueError(
-                    f"Norm type {self.cfg.designs.norm_type} not recognized."
-                )
+            norm_xi = jnp.log(xi)
             log_x = model._sample_n(
                 key=prng_key,
                 n=num_samples,
@@ -366,14 +285,7 @@ class Workspace:
                 spline_range_max=self.spline_range_max,
             )
             norm_theta = prior_to_standard_normal(theta)
-            if self.cfg.designs.norm_type == "ppf":
-                norm_xi = normalize_xi_to_gaussian(xi)
-            elif self.cfg.designs.norm_type == "log":
-                norm_xi = jnp.log(xi)
-            else:
-                raise ValueError(
-                    f"Norm type {self.cfg.designs.norm_type} not recognized."
-                )
+            norm_xi = jnp.log(xi)
             log_x = model.sample_from_base(base_sample, norm_theta, norm_xi)
             return jnp.exp(log_x)
 
@@ -400,12 +312,7 @@ class Workspace:
             )
             # Since base is gaussian, transform from lognormal to normal
             log_x = jnp.log(x + 1e-8)
-            if self.cfg.designs.norm_type == "ppf":
-                norm_xi = normalize_xi_to_gaussian(xi)
-            elif self.cfg.designs.norm_type == "log":
-                norm_xi = jnp.log(xi)
-            else:
-                raise ValueError(f"Norm type {self.cfg.designs.norm_type} not recognized. And you better normalize.")
+            norm_xi = jnp.log(xi)
             norm_theta = prior_to_standard_normal(theta)
             lps = model.log_prob(log_x, norm_theta, norm_xi)
             logdetjac = log_trans_logdetjac(x)
@@ -503,18 +410,8 @@ class Workspace:
         # Making this range smaller to avoid numerical issues in first round
         design_min = 0.01
         design_max = 100.
-        norm_type = self.cfg.designs.norm_type
-        scale_factor = 100.
 
-        if norm_type == "inf":
-            scale_factor = float(jnp.max(jnp.array([jnp.abs(design_min), jnp.abs(design_max)])))
-            xi_params_scaled = {k: jnp.divide(v, scale_factor) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
-        elif norm_type == "log":
-            xi_params_scaled = {k: jnp.log(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
-        elif norm_type == "ppf":
-            xi_params_scaled = {k: normalize_xi_to_gaussian(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
-        else:
-            raise ValueError(f"Norm type {norm_type} not recognized.")
+        xi_params_scaled = {k: jnp.log(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
 
         flow_params = {key: value for key, value in flow_params.items() if key != 'xi_mu' and key != 'xi_stddev'}
 
@@ -540,16 +437,14 @@ class Workspace:
         # Has keys: prior_samples, ys, dt, ts, N, I0, num_samples
         true_sde_dict = torch.load(file_path, map_location="cpu", weights_only=False)
         # Training trajectories are generated online on a 100,000-point grid.
-        # Only debug mode needs the historical precomputed prior pool.
         sde_dict = {"ts": torch.linspace(0.0, 100.0, 100000)}
-        if self.debug:
-            if not self.cfg.data.prior_pool:
-                raise ValueError("experiment.debug=true requires data.prior_pool.")
-            with open(self.cfg.data.prior_pool, "rb") as file:
-                sde_dict = pkl.load(file)
 
         self.static_outputs_sbi = None
         self.d = None
+
+        posterior_theta_pool = None
+        posterior_sde_pool = None
+        mcmc_posterior = None
 
         # ----- Start SBI-BOED -----
         for design_round in range(self.design_rounds):
@@ -566,20 +461,16 @@ class Workspace:
 
             # Build the paired theta/SDE pool used throughout this BOED round.
             if design_round == 0:
-                if self.debug:
-                    boed_sde_pool = jnp.array(sde_dict['final_ys'])
-                    boed_theta_pool = jnp.array(sde_dict['theta_0'])
-                else:
-                    prior_samples, prior_log_probs = sample_lognormal_with_log_probs(
-                        next(prng_seq), self.posterior_pool_size
-                    )
-                    boed_sde_pool, boed_theta_pool, _ = collect_sufficient_sde_samples_prior(
-                        self.posterior_pool_size,
-                        prior_samples,
-                        prior_log_probs,
-                        self.device,
-                        prng_seq,
-                    )
+                prior_samples, prior_log_probs = sample_lognormal_with_log_probs(
+                    next(prng_seq), self.posterior_pool_size
+                )
+                boed_sde_pool, boed_theta_pool, _ = collect_sufficient_sde_samples_prior(
+                    self.posterior_pool_size,
+                    prior_samples,
+                    prior_log_probs,
+                    self.device,
+                    prng_seq,
+                )
                 prior_lp_fun = lambda theta: lognormal_log_prob(theta)
             else:
                 boed_theta_pool = posterior_theta_pool
@@ -631,8 +522,6 @@ class Workspace:
                         design_min=float(design_min),
                         design_max=design_max,
                         end_sigma=self.end_sigma,
-                        importance_sampling=self.importance_sampling,
-                        use_design_dist=self.use_design_dist,
                         prev_data=self.static_outputs_sbi[theta_indices] if self.static_outputs_sbi is not None else None,
                         prev_designs=self.d[theta_indices] if self.d is not None else None,
                         epig_log_prob_fun=epig_log_prob_fun,
@@ -673,52 +562,22 @@ class Workspace:
                     print("Xi gradients contain NaNs. Resetting to EMA params.")
                     # TODO: Make more configureable with the type of normalization chosen
                     xi_params['xi_mu'] = jnp.array(best_xi_mu_eig)
-                    if self.cfg.designs.norm_type == "ppf":
-                        xi_params_scaled['xi_mu'] = normalize_xi_to_gaussian(xi_params['xi_mu'])
-                    elif self.cfg.designs.norm_type == "log":
-                        xi_params_scaled['xi_mu'] = jnp.log(xi_params['xi_mu'])
-                    else:
-                        raise ValueError(f"Norm type {self.cfg.designs.norm_type} not recognized. And you better normalize.")
+                    xi_params_scaled['xi_mu'] = jnp.log(xi_params['xi_mu'])
 
                     opt_state = optimizer.init((ema_params, xi_params_scaled))
                     ema_opt_state = ema.init(flow_params)
 
-                if norm_type == "inf":
-                    # Setting bounds on the xi_mu values
-                    max_bound = jnp.divide(design_max, scale_factor)-0.001
-                    xi_params_scaled['xi_mu'] = jnp.clip(
-                        xi_params_scaled['xi_mu'],
-                        a_min=jnp.divide(design_min, scale_factor),
-                        a_max=max_bound
-                        )
-                    xi_params['xi_mu'] = jnp.multiply(xi_params_scaled['xi_mu'], scale_factor)
-                    xi_params['xi_stddev'] = jnp.multiply(xi_params_scaled['xi_stddev'], scale_factor)
-                elif norm_type == "log":
-                    max_bound = jnp.log(design_max)
-                    min_bound = jnp.log(design_min)
-                    xi_params_scaled['xi_mu'] = jnp.clip(
-                        xi_params_scaled['xi_mu'],
-                        a_min=min_bound,
-                        a_max=max_bound
-                        )
-                    xi_params['xi_mu'] = jnp.exp(
-                        xi_params_scaled['xi_mu'])
-                    xi_params['xi_stddev'] = jnp.exp(
-                        xi_params_scaled['xi_stddev'])
-                elif norm_type == "ppf":
-                    max_bound = normalize_xi_to_gaussian(design_max)
-                    min_bound = normalize_xi_to_gaussian(design_min)
-                    xi_params_scaled['xi_mu'] = jnp.clip(
-                        xi_params_scaled['xi_mu'],
-                        a_min=min_bound,
-                        a_max=max_bound
-                        )
-                    xi_params['xi_mu'] = inverse_normalize_xi(
-                        xi_params_scaled['xi_mu'])
-                    xi_params['xi_stddev'] = inverse_normalize_xi(
-                        xi_params_scaled['xi_stddev'])
-                else:
-                    raise ValueError(f"Norm type {norm_type} not recognized.")
+                max_bound = jnp.log(design_max)
+                min_bound = jnp.log(design_min)
+                xi_params_scaled['xi_mu'] = jnp.clip(
+                    xi_params_scaled['xi_mu'],
+                    a_min=min_bound,
+                    a_max=max_bound
+                    )
+                xi_params['xi_mu'] = jnp.exp(
+                    xi_params_scaled['xi_mu'])
+                xi_params['xi_stddev'] = jnp.exp(
+                    xi_params_scaled['xi_stddev'])
 
                 # calculate the rolling average
                 eig_history.append(EIG)
@@ -811,20 +670,11 @@ class Workspace:
 
             ############# Finished design optimization & reset to best checkpointed params #############
             xi_params['xi_mu'] = jnp.array(best_xi_mu_eig)
-            if self.cfg.designs.norm_type == "inf":
-                xi_params_scaled['xi_mu'] = jnp.divide(xi_params['xi_mu'], scale_factor)
-            elif self.cfg.designs.norm_type == "ppf":
-                xi_params_scaled['xi_mu'] = normalize_xi_to_gaussian(xi_params['xi_mu'])
-            elif self.cfg.designs.norm_type == "log":
-                xi_params_scaled['xi_mu'] = jnp.log(xi_params['xi_mu'])
-            else:
-                raise ValueError(f"Norm type {self.cfg.designs.norm_type} not recognized. And you better normalize.")
+            xi_params_scaled['xi_mu'] = jnp.log(xi_params['xi_mu'])
 
             flow_params = ema_params
 
-            ############# Refine likelihood using SBC #############
-            # Can either update with the MI-based or KL-based optimization... use KL for now but know you can reuse
-            # Need to still generate prior & likelihood samples for SBI
+            # Generate the paired trajectory pool used for posterior diagnostics.
             if design_round == 0:
                 thetas_sbi, thetas_sbi_lp = sample_lognormal_with_log_probs(
                     next(prng_seq), self.posterior_pool_size
@@ -837,137 +687,12 @@ class Workspace:
                     self.num_adapt_steps,
                     self.posterior_pool_size,
                 )
-            final_ys_sbi, thetas_sbi, thetas_sbi_lp = collect_sufficient_sde_samples_prior(
+            diagnostic_sde_pool, thetas_sbi, thetas_sbi_lp = collect_sufficient_sde_samples_prior(
                 self.posterior_pool_size,
                 thetas_sbi,
                 thetas_sbi_lp,
                 self.device,
                 prng_seq,)
-
-            if self.d is None:
-                x_sbi, _, _ = simulate_sir(
-                    jnp.broadcast_to(
-                        xi_params['xi_mu'], (self.posterior_pool_size, 1)),
-                    jnp.array(sde_dict['ts'].numpy()),
-                    final_ys_sbi)
-            else:
-                # TODO: Make sure that the outputs from this correspond with how likelihood was trained
-                vectorized_simulator = jax.vmap(
-                    self.simulator, in_axes=(1, None, None))
-                x_sbi, _, _ = vectorized_simulator(
-                    jnp.concatenate((
-                        self.d,
-                        jnp.broadcast_to(
-                            xi_params['xi_mu'], (self.posterior_pool_size, 1)
-                        ),
-                        ), axis=1),
-                    jnp.array(sde_dict['ts'].numpy()),
-                    final_ys_sbi
-                    )
-                x_sbi = x_sbi.squeeze().T
-
-            # BUG: The worsening likleihood might be bc you're training with dropout for KL refinement
-            @jax.jit
-            def generalized_log_prob_fun(params, x, theta, xi):
-                if x.shape[1] == 1:
-                    conditional_lp = self.log_prob_nodrop.apply(params, x, theta, xi)
-                else:
-                    # prng_keys = jax.random.split(prng_key, num=x.shape[1])
-                    conditional_lp = jax.vmap(self.log_prob_nodrop.apply, in_axes=(None, -1, None, -1))(
-                        params, x[:, jnp.newaxis], theta, xi[:, jnp.newaxis]
-                    )
-                    conditional_lp = jnp.sum(conditional_lp, axis=0)
-                return conditional_lp
-
-            if self.d is None:
-                sbc_prior_sample_fun = lambda samples: sample_lognormal_with_log_probs(next(prng_seq), samples)
-            else:
-                sbc_prior_sample_fun = lambda samples: run_mcmc(
-                    next(prng_seq), prior_lp, loglikelihood, mcmc_posterior, theta_0, self.num_adapt_steps, samples)
-
-            # TODO: Maybe customize this optmiizer to be unique
-            # TODO: add in wandb logging of the validation loss
-            optimizer = optax.chain(optax.clip_by_global_norm(self.grad_clip),
-                                    optax.adamw(self.learning_rate, b2=self.flow_beta2))
-            opt_state = optimizer.init(flow_params)
-            ema_refine = optax.ema(decay=0.9999, debias=False)
-            ema_refine_opt_state = ema_refine.init(flow_params)
-            ema_refine_params = flow_params
-            best_kl_loss = float('inf')
-
-            if self.d is None:
-                sbi_d = jnp.broadcast_to(
-                    xi_params['xi_mu'], (self.posterior_pool_size, 1)
-                )
-            else:
-                sbi_d = jnp.concatenate(
-                    (
-                        self.d,
-                        jnp.broadcast_to(
-                            xi_params['xi_mu'], (self.posterior_pool_size, 1)
-                        ),
-                    ),
-                    axis=1,
-                )
-
-            x_sbi, thetas_sbi, sbi_d, x_sbi_val, thetas_sbi_val, sbi_d_val = split_data_for_validation_jax(
-                x_sbi,
-                thetas_sbi,
-                sbi_d,
-                next(prng_seq),
-                validation_fraction=0.1
-            )
-
-            key, sub_key = jrandom.split(next(prng_seq))
-
-            for step in range(self.sbi_train_steps):
-                key, sub_key = jrandom.split(key)
-                x_sbi, thetas_sbi, sbi_d = shuffle_samples(
-                    next(prng_seq), x_sbi, thetas_sbi, sbi_d)
-
-                if self.sbc_lambda == 0:
-                    kl_loss, grads = jax.value_and_grad(kl_loss_fn_general)(
-                        flow_params,
-                        # sub_key,
-                        x_sbi,
-                        thetas_sbi,
-                        sbi_d,
-                        generalized_log_prob_fun
-                        )
-                else:
-                    kl_loss, grads = jax.value_and_grad(kl_sbc_loss_fn_general)(
-                        flow_params,
-                        x_sbi,
-                        thetas_sbi,
-                        sbc_prior_sample_fun,
-                        generalized_log_prob_fun,
-                        self.sbc_samples,
-                        self.sbc_lambda,
-                        xi=sbi_d
-                        )
-                updates, opt_state = optimizer.update(grads, opt_state, flow_params)
-                flow_params = optax.apply_updates(flow_params, updates)
-                ema_refine_params, ema_refine_opt_state = ema_refine.update(flow_params, ema_refine_opt_state)
-                key, sub_key = jrandom.split(key)
-
-                val_loss = generalized_log_prob_fun(flow_params, x_sbi_val, thetas_sbi_val, sbi_d_val)
-
-                if kl_loss < best_kl_loss:
-                    best_kl_loss = kl_loss
-                print(f"KL Loss: {kl_loss:.4f}")
-                print(f"val KL Loss: {-jnp.mean(val_loss):.4f}")
-                if self.cfg.wandb.use_wandb:
-                    # TODO: see if this fixes the issue of not logging the refine KL loss as a line plot
-                    step_metric_name = f"boed_{design_round}/refine_step"
-                    wandb.define_metric(step_metric_name)
-                    wandb.define_metric(f"boed_{design_round}/*", step_metric=step_metric_name)
-                    wandb.log({
-                        f"boed_{design_round}/kl_loss": kl_loss,
-                        f"boed_{design_round}/kl_val_loss": -jnp.mean(val_loss),
-                        step_metric_name: step,
-                        })
-            flow_params = ema_refine_params
-
 
             ############# Log experiment #############
             # Use best xi_mu corresponding to best EIG for SBI
@@ -1074,7 +799,7 @@ class Workspace:
                     jnp.broadcast_to(
                         xi_params['xi_mu'], (self.posterior_pool_size, 1)),
                     jnp.array(sde_dict['ts'].numpy()),
-                    final_ys_sbi)
+                    diagnostic_sde_pool)
             else:
                 # TODO: Make sure that the outputs from this correspond with how likelihood was trained
                 vectorized_simulator = jax.vmap(
@@ -1082,7 +807,7 @@ class Workspace:
                 xs, _, _ = vectorized_simulator(
                     self.d,
                     jnp.array(sde_dict['ts'].numpy()),
-                    final_ys_sbi
+                    diagnostic_sde_pool
                     )
                 xs = xs.squeeze().T
 
@@ -1125,7 +850,7 @@ class Workspace:
             print(f"Reject null hypothesis at alpha = {alpha}:", reject)
 
             ############ Save params/data & draw posterior sample that becomes new theta_0 ###############
-            # Save the likelihood here to debug posterior training
+            # Save the fitted likelihood and diagnostics for this design round.
             if self.cfg.experiment.save_params:
                 flow_save_key = f"design_round_{design_round}_flow_params"
                 objects = {flow_save_key: jax.device_get(flow_params),
@@ -1196,15 +921,7 @@ class Workspace:
             xi_params['xi_stddev'] = self.xi_stddev
 
             # Reset the xi_params_scaled for optimization
-            if norm_type == "inf":
-                xi_params_scaled['xi_mu'] = jnp.divide(self.xi, scale_factor)
-                xi_params_scaled['xi_stddev'] = jnp.divide(self.xi_stddev, scale_factor)
-            elif norm_type == "log":
-                xi_params_scaled = {k: jnp.log(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
-            elif norm_type == "ppf":
-                xi_params_scaled = {k: normalize_xi_to_gaussian(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
-            else:
-                raise ValueError(f"Norm type {norm_type} not recognized.")
+            xi_params_scaled = {k: jnp.log(v) for k, v in xi_params.items() if k in ['xi_mu', 'xi_stddev']}
 
             # optionally reset the params
             if self.cfg.flow_params.reset_flow and design_round < self.design_rounds - 1:
@@ -1259,16 +976,7 @@ class Workspace:
 
 @hydra.main(version_base=None, config_path=".", config_name="config_sir")
 def main(cfg):
-    fname = os.getcwd() + '/latest.pt'
-    if os.path.exists(fname):
-        print(f'Resuming fom {fname}')
-        with open(fname, 'rb') as f:
-            workspace = pkl.load(f)
-        print(f"STEP: {workspace.step:5d}; Xi: {workspace.xi};\
-             Xi Grads: {workspace.xi_grads}; Loss: {workspace.loss}")
-    else:
-        workspace = Workspace(cfg)
-
+    workspace = Workspace(cfg)
     workspace.run()
 
 

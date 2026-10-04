@@ -13,7 +13,6 @@ import distrax
 import haiku as hk
 
 from lfiax.utils.simulators import sim_linear_prior, sim_linear_data_vmap, sim_linear_prior_M_samples, simulate_sir
-from lfiax.utils.utils import get_calibration_error_jax
 
 
 from typing import Any, Callable, NamedTuple, Tuple
@@ -414,10 +413,7 @@ def shuffle_samples(key, x, theta, xi):
     return x[shuffled_indices], theta[shuffled_indices], xi[shuffled_indices]
 
 
-@partial(
-    jax.jit,
-    static_argnums=[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22],
-)
+@partial(jax.jit, static_argnames=('log_prob_fun', 'N', 'M', 'lam', 'design_min', 'design_max', 'epig_log_prob_fun', 'epig_sample_fun', 'epig_enabled', 'epig_policy', 'epig_K', 'epig_S', 'epig_dropout_crn'))
 def lf_pce_design_dist_sir(
     flow_params: hk.Params,
     xi_params_scaled: hk.Params,
@@ -433,7 +429,6 @@ def lf_pce_design_dist_sir(
     lam: float=0.5,
     design_min: float=0.01,
     design_max: float=100.,
-    use_design_dist: bool=True,
     epig_log_prob_fun: Callable = None,
     epig_sample_fun: Callable = None,
     epig_enabled: bool = False,
@@ -458,15 +453,12 @@ def lf_pce_design_dist_sir(
     candidate_count = theta_0.shape[0]
 
     # Unnormalize designs to get proper output values
-    if use_design_dist:
-        xi_params = {k: jnp.exp(v) for k, v in xi_params_scaled.items() if k in ['xi_mu', 'xi_stddev']}
-        # xi_params = {k: inverse_normalize_xi(v) for k, v in xi_params_scaled.items() if k in ['xi_mu', 'xi_stddev']}
-        a, b = (design_min - xi_params['xi_mu']) / xi_params['xi_stddev'], (design_max - xi_params['xi_mu']) / xi_params['xi_stddev']
-        d_sim = xi_params['xi_mu'] + xi_params['xi_stddev'] * jrandom.truncated_normal(
-            design_key, a, b, shape=(candidate_count, 1)
-        )
-    else:
-        d_sim = jnp.broadcast_to(xi_params_scaled['xi_mu'], (candidate_count, 1))
+    xi_params = {k: jnp.exp(v) for k, v in xi_params_scaled.items() if k in ['xi_mu', 'xi_stddev']}
+    # xi_params = {k: inverse_normalize_xi(v) for k, v in xi_params_scaled.items() if k in ['xi_mu', 'xi_stddev']}
+    a, b = (design_min - xi_params['xi_mu']) / xi_params['xi_stddev'], (design_max - xi_params['xi_mu']) / xi_params['xi_stddev']
+    d_sim = xi_params['xi_mu'] + xi_params['xi_stddev'] * jrandom.truncated_normal(
+        design_key, a, b, shape=(candidate_count, 1)
+    )
 
     def total_log_prob(params, key, x, theta, designs):
         if x.shape[1] == 1:
@@ -604,99 +596,6 @@ def lf_pce_design_dist_sir(
     loss = EIG + lam * jnp.mean(conditional_lp)
 
     return -loss, (conditional_lp, EIG, EIGs, x_mean, x_std, xi, diagnostics)
-
-@partial(jax.jit, static_argnums=[7,8,9,10,11,12,13,14,15,16])
-def lf_ace_design_dist_sir(flow_params: hk.Params,
-                           post_params: hk.Params,
-                           xi_params_scaled: hk.Params,
-                           prng_key: PRNGKey,
-                           final_ys: Array,
-                            sde_dict_ts: Array,
-                            theta_0: Array,
-                            likelihood_lp_fun: Callable,
-                            prior_lp_fun: Callable,
-                            prior_sample_fun: Callable,
-                            post_lp_fun: Callable,
-                            post_sample_fun: Callable,
-                            N: int=100,
-                            M: int=10,
-                            lam: float=0.5,
-                            design_min: float=0.01,
-                            design_max: float=100.,
-                            sbc_samples: int=32,
-                            sbc_lambda: float=1.,
-                            ):
-    """
-    Calculates LF-ACE loss using jax.lax.scan to accelerate. Only requires a likelihood
-    and posterior.
-
-    The "prior_lp_fun" needs to be passed in with the
-    """
-    keys = jrandom.split(prng_key, 3 + M)
-
-    # Unnormalize designs to get proper output values
-    xi_params = {k: jnp.multiply(v, 100.) for k, v in xi_params_scaled.items() if k in ['xi_mu', 'xi_stddev']}
-    a, b = (design_min - xi_params['xi_mu']) / xi_params['xi_stddev'], (design_max - xi_params['xi_mu']) / xi_params['xi_stddev']
-    d_sim = xi_params['xi_mu'] + xi_params['xi_stddev'] * jrandom.truncated_normal(keys[0], a, b, shape=(N,1))
-
-    # Scale for conditional flow
-    xi = d_sim/100.
-
-    scaled_x, x_mean, x_std = simulate_sir(d_sim,
-                                           sde_dict_ts,
-                                           final_ys/100.)
-
-    if len(scaled_x.shape) > 2:
-        scaled_x = scaled_x.squeeze(0)
-
-    def compute_marginal_lp(keys, M, theta_0, x, conditional_lp):
-        def scan_fun(carry, i):
-            contrastive_lps = carry
-            theta, _ = post_sample_fun(post_params, keys[i], N, x)
-            contrastive_prior = prior_lp_fun(theta)
-            contrastive_likelihood = likelihood_lp_fun(flow_params, x, theta, xi)
-            contrastive_posterior = post_lp_fun(
-                # jax.lax.stop_gradient(post_params), theta, x)
-                post_params, theta, x)
-            contrastive_lp = (contrastive_prior + contrastive_likelihood) - contrastive_posterior
-            contrastive_lp = jnp.logaddexp(contrastive_lps, contrastive_lp)
-            return (contrastive_lp), i + 1
-
-        contrastive_prior = prior_lp_fun(theta_0)
-        contrastive_likelihood = likelihood_lp_fun(flow_params, x, theta_0, xi)
-        contrastive_posterior = post_lp_fun(
-            # jax.lax.stop_gradient(post_params), theta_0, x)
-            post_params, theta_0, x)
-        conditional_lp = contrastive_prior + contrastive_likelihood - contrastive_posterior
-        initial_carry = (conditional_lp)
-
-        result = jax.lax.scan(scan_fun, initial_carry, jnp.array(range(M)))
-        return result[0]
-
-    conditional_lp = likelihood_lp_fun(flow_params, scaled_x, theta_0, xi)
-
-    # BUG: This should be shape [512,1]
-    marginal_lp = compute_marginal_lp(
-        keys[1:M+1], M, theta_0, scaled_x, conditional_lp
-        ) - jnp.log(M + 1)
-
-    EIG, EIGs = _safe_mean_terms(conditional_lp - marginal_lp)
-
-    loss = EIG + lam * jnp.mean(conditional_lp)# + sbc_lambda * sbc_regularization
-
-    theta, contrastive_posterior = post_sample_fun(post_params, keys[0], N, scaled_x)
-    prior_lp = prior_lp_fun(theta_0)
-    contrastive_prior = prior_lp_fun(theta)
-    contrastive_likelihood = likelihood_lp_fun(flow_params, scaled_x, theta_0, xi)
-    posterior_lp = post_lp_fun(
-        jax.lax.stop_gradient(post_params), theta_0, scaled_x)
-    contrastive_lp = (prior_lp + contrastive_likelihood) - posterior_lp
-    prior_post_diff = prior_lp - posterior_lp
-    prior_post_cont = contrastive_prior - contrastive_posterior
-    # best_design_i = jnp.argmax(EIGs)
-    # jax.debug.breakpoint()
-
-    return -loss , (conditional_lp, EIG, EIGs, x_mean, x_std, d_sim, prior_post_diff, prior_post_cont)
 
 
 def _logmeanexp(a: Array, axis: int) -> Array:

@@ -6,19 +6,13 @@ seed: 0
 # Run from the repository root. Prior trajectories are generated online.
 data:
   observations: sde_data/sir_sde_data_real_8_0.pt
-  prior_pool: null  # Optional historical pickle, used only with debug=true.
 
 experiment:
   design_rounds: 2
-  refine_rounds: 0
   posterior_pool_size: 1_000 # Paired posterior theta/SDE pool; must be >= N
-  sbi_train_steps: 0  # this is really just the post-train modification
-  sir_type: "8_0"    # Can only be "1_3", "3_0", or "8_0"
   device: "cpu"      # Can only be "cpu" or "cuda"
   save_params: True
   save_name: "test_sir"
-  hpc: False
-  debug: False
 
 wandb:
   use_wandb: False
@@ -42,19 +36,9 @@ epig:
   softmax_temperature: 1.0
 
 designs:
-  d: null # [10.] # [-5., -2.5, 0., 2.5, 5., .1, .2, .3, .4, 0.01] #  # [0.] # 0. # null
-  xi: null #  [-10., 10.] # [0.]
   num_xi: 1 # should only ever be one :)
-  norm_type: "log" # Only inf or log or ppf
-  scale_factor: 12.0
-  df: 2.  # If using "student" the scale factor should be 11 or greater
   xi_mu: 50.
   xi_stddev: 30.
-  use_design_dist: True
-
-param_shapes:
-  theta_shape: 2
-  event_dim: 1
 
 flow_params:
   num_layers: 5
@@ -71,43 +55,20 @@ flow_params:
 
 mcmc_params:
   num_adapt_steps: 1_000
-  num_mcmc_samples: 1_000
-
-# TODO: Make posterior yaml parameters
-post_optimization:
-  num_layers: 5
-  mlp_num_layers: 2
-  mlp_hidden_size: 64
-  num_bins: 4
-  resnet: True
-  sbc_lam: 0.0  # maybe change
-  sbc_samples: 128
-  vi_steps: 200
-  vi_samples: 512
 
 optimization_params:
   learning_rate: 1e-3
   xi_learning_rate: 1e-3
   xi_optimizer: "Adam"
-  xi_scheduler: "Custom"  # Only option is None, CosineDecay, or Custom
+  xi_scheduler: "Custom"  # Custom | None
   flow_beta2: 0.999
   xi_beta2: 0.999        # This mitigates large gradient updates
   ewma_smoothing: 0.8
-  coefficient: 1.0
-  tau: 10.
   training_steps: 10_000
-  refine_likelihood_rounds: 50
   xi_lr_end: 5e-5
-  lr_values: [5e-2, 1e-2, 5e-3]
-  restarts: 3
   eig_lambda: 1.
   grad_clip: 5.0
-  xi_grad_clip: 5.0
   end_sigma: 0.1
-  imp_sampling: false
-  y_scale: 100.
-  post_pre_train: True
-  post_pre_train_steps: 100
 xi_scheduler:
   patience: 200
   reduce_factor: 0.8
@@ -118,11 +79,5 @@ xi_scheduler:
 hydra:
   run:
     dir: ./data/${version}/${now:%Y.%m.%d.%H.%M}
-  # sweep:
-    # TODO: Check that xi dimensionality is preserved
-    # dir: ./data/${version}
-    # ${'null' if not designs.d else designs.d}/${designs.xi}/${optimization_params.lambda_}/${lagrange_weight_sch.sigmoid_params.slope}/${contrastive_sampling.N}/${contrastive_sampling.M}/${now:%Y.%m.%d.%H.%M}
-    # subdir: ${hydra.job.num}/${seed}
-    # subdir: ${hydra.job.override_dirname}
   job:
     chdir: false

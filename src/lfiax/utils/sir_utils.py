@@ -1,36 +1,7 @@
 import jax
 import jax.numpy as jnp
-import jax.random as jrandom
-import numpy as np
-from collections import deque
 from typing import NamedTuple
 
-
-def add_noise_to_zeros(matrix, noise_level=1e-6):
-    """
-    Adds noise to zero elements in the matrix.
-
-    Parameters:
-    matrix (jnp.ndarray): Input matrix of shape [N, M].
-    noise_level (float): Standard deviation of the noise to be added.
-
-    Returns:
-    jnp.ndarray: Matrix with noise added to zero elements.
-    """
-
-    # Set a random seed for reproducibility
-    key = jrandom.PRNGKey(0)
-
-    # Create a mask of zero elements
-    zero_mask = matrix == 0
-
-    # Generate noise with the same shape as matrix
-    noise = jrandom.normal(key, matrix.shape) * noise_level
-
-    # Add noise to zero elements only
-    result = jnp.where(zero_mask, noise, matrix)
-
-    return result
 
 class LossSmoother:
     def __init__(self, beta=0.9, initial_loss=float('inf')):
@@ -47,58 +18,6 @@ class LossSmoother:
 
     def get_smoothed_loss(self):
         return self.smoothed_loss
-
-
-class LossHistory:
-    def __init__(self, capacity: int):
-        self.buffer = deque(maxlen=capacity)
-
-    def update(self, loss: float):
-        self.buffer.append(loss)
-
-    def get_std_dev(self) -> float:
-        if len(self.buffer) < 2:  # Need at least 2 data points to calculate std dev
-            return float('inf')  # Return a large number or another default value
-        return jnp.std(jnp.array(self.buffer))
-
-    def get_recent_losses(self) -> np.array:
-        return jnp.array(self.buffer)
-
-
-def compute_second_order_derivative(gradient_history, step_size=1):
-    """
-    Approximate second-order derivative using finite differences.
-
-    Parameters:
-    gradient_history (list or deque): A history of past gradient values.
-    step_size (int): The step size used for finite difference calculation.
-
-    Returns:
-    float: Approximated second-order derivative.
-    """
-    if len(gradient_history) < 2:
-        return 0.0  # or some default value, as there's not enough history to compute second derivative
-
-    # Using simple two-point formula for second derivative approximation
-    return (gradient_history[-1] - gradient_history[-2]) / step_size
-
-
-def dynamic_factor(gradient_of_smoothed_loss, step_num, coefficient, tau):
-    return 1 / (1 + jnp.abs(gradient_of_smoothed_loss)**2) * (1 + coefficient * (1 - jnp.exp(-step_num / tau)))
-
-
-def second_order_dynamic_factor(
-        gradient_of_smoothed_loss,
-        second_order_derivative,
-        step_num,
-        coefficient,
-        tau
-        ):
-    curvature_factor = 1 / (1 + jnp.abs(second_order_derivative))
-    gradient_factor = 1 / (1 + jnp.abs(gradient_of_smoothed_loss)**2)
-    time_factor = (1 + coefficient * (1 - jnp.exp(-step_num / tau)))
-
-    return curvature_factor * gradient_factor * time_factor
 
 
 class ReduceLROnPlateauState(NamedTuple):
@@ -200,85 +119,3 @@ def reduce_on_plateau(
         return updates, new_state
 
     return init_fn, update_fn
-
-def adjust_learning_rate(
-        current_loss,
-        previous_loss,
-        current_lr,
-        momentum_term,
-        gradient_of_smoothed_loss,
-        step_num,
-        coefficient,
-        tau,
-        exploitation_threshold,
-        exploration_threshold,
-        second_order_derivative,
-        momentum=0.9,
-        ):
-    # Dynamically calculate factors based on the gradient of smoothed loss
-    dynamic_exploitation_factor = 0.5 * dynamic_factor(gradient_of_smoothed_loss, step_num, coefficient, tau)
-    # dynamic_exploitation_factor = 0.5 * second_order_dynamic_factor(gradient_of_smoothed_loss, second_order_derivative, step_num, coefficient, tau)
-    dynamic_exploration_factor = 1.1 * dynamic_factor(gradient_of_smoothed_loss, step_num, coefficient, tau)
-
-    # Defining the functions for each branch of the conditional
-    def exploitation_branch(operand):
-        adjust = operand * dynamic_exploitation_factor
-        return adjust
-
-    def exploration_branch(operand):
-        adjust = operand * dynamic_exploration_factor
-        return adjust
-
-    def default_branch(operand):
-        adjust = operand * 0.99  # Example gradual reduction factor
-        return adjust
-
-    def false_fun_branch(operand):
-        # Nested condition inside the false branch
-        return jax.lax.cond(jnp.greater(current_loss, previous_loss * 0.99),
-        # return jax.lax.cond(jnp.greater(current_loss, previous_loss * exploration_threshold),
-                        exploration_branch,
-                        default_branch,
-                        operand)
-
-    # Creating the conditional
-    pred = jnp.less(current_loss, previous_loss * 0.95)  # Example significant drop threshold
-    # pred = jnp.less(current_loss, previous_loss * exploitation_threshold)
-    adjustment_factor = jax.lax.cond(pred, exploitation_branch, false_fun_branch, current_lr)
-
-    # Update the momentum term
-    new_momentum_term = momentum * momentum_term + (1 - momentum) * adjustment_factor
-    new_lr = current_lr * new_momentum_term
-
-    return new_lr.astype(float), new_momentum_term
-
-
-@jax.jit
-def reflect_params(new_params, lower_bound, upper_bound):
-    def reflect_upper(params):
-        diff = upper_bound - params
-        return upper_bound + diff
-
-    def reflect_lower(params):
-        diff = lower_bound - params
-        return lower_bound + diff
-
-    reflected_params = jax.lax.cond(
-        jnp.all(new_params > upper_bound),
-        reflect_upper,
-        lambda x: jax.lax.cond(
-            jnp.all(x < lower_bound),
-            reflect_lower,
-            lambda y: y,  # Identity function, returns new_params unmodified
-            x,
-        ),
-        new_params
-    )
-
-    return reflected_params
-
-
-def wrap_params(new_params, lower_bound, upper_bound):
-    range_width = upper_bound - lower_bound
-    wrapped_params = lower_bound + (new_params - lower_bound) % range_width
-    return wrapped_params

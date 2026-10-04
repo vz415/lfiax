@@ -10,7 +10,6 @@ import haiku as hk
 
 import torch
 
-from lfiax.utils.utils import create_lognormal_to_gaussian_bijectors, sir_update_prod_likelihood_bespoke
 from lfiax.utils.torch_utils import solve_sir_sdes
 
 from functools import partial
