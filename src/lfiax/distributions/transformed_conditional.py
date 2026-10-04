@@ -22,16 +22,21 @@ class ConditionalTransformed(Transformed):
         super().__init__(distribution, flow)
 
     def _sample_n(
-        self,
-        key: PRNGKey,
-        n: int,
-        theta: Array,
-        xi: Array,
+        self, key: PRNGKey, n: int, theta: Array, xi: Array,
     ) -> Array:
         """Returns `n` samples conditioned on `z`."""
         x = self.distribution.sample(seed=key, sample_shape=n)
-        y, _ = self.bijector.forward_and_log_det(x, theta, xi)
-        return y
+        return self.sample_from_base(x, theta, xi)
+
+    def sample_from_base(
+        self,
+        base_sample: Array,
+        theta: Array,
+        xi: Array,
+    ) -> Array:
+        """Transforms caller-supplied base samples through the conditional flow."""
+        sample, _ = self.bijector.forward_and_log_det(base_sample, theta, xi)
+        return sample
 
     def log_prob(self, value: Array, theta: Array, xi: Array) -> Array:
         """See `Distribution.log_prob`."""
@@ -59,6 +64,7 @@ class ConditionalTransformed(Transformed):
         """
         x, lp_x = self.distribution.sample_and_log_prob(seed=key, sample_shape=n)
         # TODO: if i want to use this, i have to fix this vmap working with my conditioner net
-        y, fldj = jax.vmap(self.bijector.forward_and_log_det)(x, theta, xi)
+        # y, fldj = jax.vmap(self.bijector.forward_and_log_det)(x, theta, xi)
+        y, fldj = self.bijector.forward_and_log_det(x, theta, xi)
         lp_y = jax.vmap(jnp.subtract)(lp_x, fldj)
         return y, lp_y

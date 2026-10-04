@@ -1,20 +1,27 @@
+from functools import partial
+
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
-from sklearn.model_selection import KFold
+import blackjax
+import tensorflow_probability.substrates.jax as tfp
+import haiku as hk
+import distrax
+from lfiax.flows.nsf import make_nsf
+
 import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
 
 from typing import List, Optional, Tuple, Union
 
-import haiku as hk
-import numpy as np
-from scipy.stats import binom
 import tensorflow_datasets as tfds
 
 from typing import (
     Any,
+    Callable,
+    Sequence,
+    Union,
     Iterator,
     Mapping,
     Optional,
@@ -24,6 +31,11 @@ from typing import (
 Array = jnp.ndarray
 Batch = Mapping[str, np.ndarray]
 PRNGKey = Array
+
+
+# ------------ training helpers ------------
+from sklearn.model_selection import KFold
+from scipy.stats import gaussian_kde, binom
 
 
 def plot_contour_prior_posterior(
@@ -85,7 +97,6 @@ def plot_contour_prior_posterior(
     ax2.set_title("Posterior Contour Density")
     ax2.set_xlabel("\u03B8\u2081")
     ax2.set_ylabel("\u03B8\u2080")
-
 
 def plot_prior_posteriors(
     prior_samples,
@@ -177,7 +188,6 @@ def plot_prior_posteriors(
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=900, bbox_inches="tight")
 
-
 def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename):
     # Create a figure with two subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -207,10 +217,6 @@ def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename)
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=300, bbox_inches="tight")
 
-    # Display the figure
-    # plt.show()
-
-
 def save_posterior_marginal(posterior_samples_marginal, filename):
     # Create a figure
     fig = plt.figure(figsize=(8, 6))
@@ -226,11 +232,9 @@ def save_posterior_marginal(posterior_samples_marginal, filename):
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=300, bbox_inches="tight")
 
-
 @jax.jit
 def inverse_standard_scale(scaled_x, shift, scale):
     return (scaled_x * scale) + shift
-
 
 @jax.jit
 def standard_scale(x):
@@ -247,7 +251,6 @@ def standard_scale(x):
     scaled_x = jax.lax.cond(x.shape[-1] == 1, single_column_fn, multi_column_fn, x)
     return scaled_x
 
-
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""
     if jnp.isscalar(A):
@@ -257,7 +260,6 @@ def jax_lexpand(A, *dimensions):
     A = A[jnp.newaxis, ...]
     A = jnp.broadcast_to(A, shape)
     return A
-
 
 def sir_update(
     log_likelihood_fn,
@@ -292,7 +294,6 @@ def sir_update(
 
     return posterior_samples, posterior_weights
 
-
 def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     """Helper function for loading and preparing tfds splits."""
     ds = split
@@ -301,7 +302,6 @@ def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     ds = ds.prefetch(buffer_size=1000)
     ds = ds.repeat()
     return iter(tfds.as_numpy(ds))
-
 
 def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     """[Legacy] Helper function for preparing tfds splits for use in fliax."""
@@ -314,7 +314,6 @@ def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Arra
     d = cond_data[:, -len_x:-len_xi]
     xi = cond_data[:, -len_xi:]
     return x, theta, d, xi
-
 
 def sbc(
     prior,
@@ -371,7 +370,6 @@ def sbc(
 
     return sbc_histogram
 
-
 def ks_test(sample1, sample2):
     """Two-sample KS-test."""
     sample1_sorted = jnp.sort(sample1)
@@ -395,7 +393,6 @@ def ks_test(sample1, sample2):
     p_value = np.exp(-2 * n * ks_statistic**2)
 
     return ks_statistic, p_value
-
 
 def c2st_accuracy(
     ranks: jnp.ndarray, uniforms: jnp.ndarray, num_folds: int = 5
@@ -460,7 +457,6 @@ def c2st_accuracy(
 
     return jnp.mean(jnp.array(accuracy_scores))
 
-
 def expected_coverage_probability(sbc_ranks: jnp.ndarray, alpha: float) -> float:
     """
     Calculate the Expected Coverage Probability (ECP) for a given value of alpha.
@@ -476,3 +472,75 @@ def expected_coverage_probability(sbc_ranks: jnp.ndarray, alpha: float) -> float
     num_ranks_exceeding_alpha = jnp.sum(sbc_ranks / num_simulations >= alpha)
     ecp = num_ranks_exceeding_alpha / num_simulations
     return ecp
+
+# SIR and EPIG experiment helpers.
+
+
+@jax.jit
+def prior_to_standard_normal(theta):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2  # Covariance matrix
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))  # Standard deviations [0.5, 0.5]
+    z = (jnp.log(theta) - theta_loc) / std_devs
+    return z
+
+@jax.jit
+def prior_lp_logdetjac(z):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))
+    log_theta = z * std_devs + theta_loc
+    theta = jnp.exp(log_theta)
+    logdetjac = jnp.sum(jnp.log(std_devs)) + jnp.sum(jnp.log(theta))
+    return logdetjac.reshape(-1, 1)
+
+@jax.jit
+def standard_normal_to_prior(z):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2  # Covariance matrix
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))  # Standard deviations [0.5, 0.5]
+    # Inverse transformation
+    log_theta = z * std_devs + theta_loc
+    theta = jnp.exp(log_theta)
+    return theta
+
+def run_mcmc(prng_seq, mcmc_posterior, theta_0, num_adapt_steps, num_mcmc_samples):
+    """
+    Runs MCMC using the NUTS algorithm provided by the BlackJAX library.
+
+    Parameters:
+    prng_seq (iterable): Pseudo-random number generator sequence.
+    mcmc_posterior (callable): Function that calculates the proportional posterior log probability.
+    theta_0 (np.ndarray): Initial values for the theta parameters.
+    num_adapt_steps (int): Number of steps to use for the window adaptation during warmup.
+    num_mcmc_samples (int): Number of MCMC samples to generate.
+
+    Returns:
+    np.ndarray: Array of MCMC samples.
+    """
+    rng_key = prng_seq
+    initial_position = prior_to_standard_normal(theta_0.mean(axis=0))[None, :]
+
+    # Warmup phase with window adaptation
+    warmup = blackjax.window_adaptation(blackjax.nuts, mcmc_posterior)
+    rng_key, warmup_key, sample_key = jrandom.split(rng_key, 3)
+    (state, parameters), _ = warmup.run(warmup_key, initial_position, num_steps=num_adapt_steps)
+
+    # Define the NUTS kernel using the adapted parameters
+    kernel = blackjax.nuts(mcmc_posterior, **parameters).step
+
+    # Sampling loop
+    def inference_loop(rng_key, kernel, initial_state, num_samples):
+        @jax.jit
+        def one_step(state, rng_key):
+            state, _ = kernel(rng_key, state)
+            return state, state
+
+        keys = jrandom.split(rng_key, num_samples)
+        _, states = jax.lax.scan(one_step, initial_state, keys)
+        return states
+
+    states = inference_loop(sample_key, kernel, state, num_mcmc_samples)
+    mcmc_samples = states.position.squeeze()
+
+    return standard_normal_to_prior(mcmc_samples), states.logdensity

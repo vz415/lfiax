@@ -1,0 +1,83 @@
+version: '0.0.13'
+version_description: 'EPIG-prioritized positive sampling.'
+
+seed: 0
+
+# Run from the repository root. Prior trajectories are generated online.
+data:
+  observations: sde_data/sir_sde_data_real_8_0.pt
+
+experiment:
+  design_rounds: 2
+  posterior_pool_size: 1_000 # Paired posterior theta/SDE pool; must be >= N
+  device: "cpu"      # Can only be "cpu" or "cuda"
+  save_params: True
+  save_name: "test_sir"
+
+wandb:
+  use_wandb: False
+  entity: null
+  project: lfiax-sir-epig
+
+contrastive_sampling:
+  M: 255  # Note: due to rolling window, M must be less than N
+  N: 256 # LF-PCE positive/contrastive batch size
+
+# Each BOED step draws a paired candidate pool, then EPIG selects its N positive
+# theta/SDE pairs. Without EPIG, the step draws N pairs directly.
+epig:
+  enabled: true
+  selection_policy: top_k  # top_k | softmax_corrected
+  num_candidates: 512      # N <= num_candidates <= posterior_pool_size
+  num_particles: 8
+  num_joint_samples: 1     # Base draws per particle; doubled when antithetic.
+  antithetic_sampling: false
+  dropout_crn: true        # Reuse one dropout ensemble across all candidates.
+  softmax_temperature: 1.0
+
+designs:
+  num_xi: 1 # should only ever be one :)
+  xi_mu: 50.
+  xi_stddev: 30.
+
+flow_params:
+  num_layers: 5
+  mlp_num_layers: 2
+  mlp_hidden_size: 128
+  num_bins: 8
+  spline_range_min: -20.0
+  spline_range_max: 7.0
+  resnet: True
+  activation: "gelu"
+  z_scale_theta: False
+  dropout_rate: 0.2
+  reset_flow: false
+
+mcmc_params:
+  num_adapt_steps: 1_000
+
+optimization_params:
+  learning_rate: 1e-3
+  xi_learning_rate: 1e-3
+  xi_optimizer: "Adam"
+  xi_scheduler: "Custom"  # Custom | None
+  flow_beta2: 0.999
+  xi_beta2: 0.999        # This mitigates large gradient updates
+  ewma_smoothing: 0.8
+  training_steps: 10_000
+  xi_lr_end: 5e-5
+  eig_lambda: 1.
+  grad_clip: 5.0
+  end_sigma: 0.1
+xi_scheduler:
+  patience: 200
+  reduce_factor: 0.8
+  min_improvement: 1e-1
+  cooldown: 10
+
+
+hydra:
+  run:
+    dir: ./data/${version}/${now:%Y.%m.%d.%H.%M}
+  job:
+    chdir: false

@@ -8,10 +8,27 @@ from functools import partial
 import distrax
 import haiku as hk
 
+import torch
+
+from lfiax.utils.torch_utils import solve_sir_sdes
+
 from functools import partial
+
+from typing import (
+    Any,
+    Iterator,
+    Mapping,
+    Optional,
+    Tuple,
+    Callable,
+    NamedTuple
+)
 
 Array = jnp.ndarray
 PRNGKey = Array
+
+
+# -------- Linear regresssion model priors --------
 
 
 @partial(jax.jit, static_argnums=0)
@@ -32,7 +49,6 @@ def sim_linear_prior(num_samples: int, key: PRNGKey):
 
     return samples, log_prob
 
-
 @partial(jax.jit, static_argnums=[0, 1])
 def sim_linear_prior_M_samples(num_samples: int, M: int, key: PRNGKey):
     """
@@ -50,7 +66,6 @@ def sim_linear_prior_M_samples(num_samples: int, M: int, key: PRNGKey):
     )
 
     return samples, log_prob
-
 
 def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
     """
@@ -84,7 +99,6 @@ def sim_linear_jax(d: Array, priors: Array, key: PRNGKey):
 
     return y, ygrads, sigma
 
-
 def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
     """
     Sim linear laplace prior regression model.
@@ -113,7 +127,6 @@ def sim_linear_jax_laplace(d: Array, priors: Array, key: PRNGKey):
 
     return y
 
-
 def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
@@ -139,7 +152,6 @@ def sim_data_laplace(d: Array, priors: Array, key: PRNGKey):
     return jnp.column_stack(
         (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
     )
-
 
 @partial(jax.jit, static_argnums=1)
 def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
@@ -193,7 +205,6 @@ def sim_linear_data_vmap(d: Array, num_samples: Array, key: PRNGKey):
 
     return y_noised, priors, y, sigma
 
-
 @jax.jit
 def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
     """
@@ -239,7 +250,6 @@ def sim_linear_data_vmap_theta(d: Array, theta: Array, key: PRNGKey):
 
     return y_noised, y, sigma
 
-
 def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training using
@@ -266,7 +276,6 @@ def sim_data_tf(d: Array, num_samples: Array, key: PRNGKey):
         (y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d))))
     )
 
-
 def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     """
     Returns data in a format suitable for normalizing flow training.
@@ -289,3 +298,122 @@ def sim_data(d: Array, num_samples: Array, key: PRNGKey):
     y, ygrads = sim_linear_jax(d, priors, keys[1])
 
     return y.T, jnp.squeeze(priors), jnp.broadcast_to(d, (num_samples, len(d)))
+
+# SIR and EPIG experiment helpers.
+
+
+def sample_lognormal_with_log_probs(seed, num_samples):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2
+    mvn_dist = distrax.MultivariateNormalFullCovariance(loc=theta_loc, covariance_matrix=theta_covmat)
+    normal_samples = mvn_dist.sample(seed=seed, sample_shape=(num_samples,))
+    lognormal_samples = jnp.exp(normal_samples)
+    log_probs = mvn_dist.log_prob(normal_samples)
+    return lognormal_samples, log_probs + normal_samples.sum(axis=-1)
+
+def lognormal_log_prob(theta):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2
+    mvn_dist = distrax.MultivariateNormalFullCovariance(
+        loc=theta_loc, covariance_matrix=theta_covmat)
+    bijector = distrax.Block(distrax.Lambda(lambda x: jnp.log(x)), ndims=1)
+    new_thetas, transform_log_prob = bijector.forward_and_log_det(theta)
+    log_probs = mvn_dist.log_prob(new_thetas)
+    return log_probs - transform_log_prob
+
+
+@jax.jit
+def linear_interpolate_trajectories(
+    xi: Array, ts: Array, ys: Array
+) -> Array:
+    """Interpolate paired trajectory values at continuous design times.
+
+    Each flattened design ``xi[i]`` is paired with trajectory column
+    ``ys[:, i]``. Designs outside the simulated time grid use the nearest
+    endpoint value.
+    """
+    xi_flat = jnp.clip(xi.reshape(-1), ts[0], ts[-1])
+    left = jnp.searchsorted(ts, xi_flat, side="right") - 1
+    left = jnp.clip(left, 0, ts.shape[0] - 2)
+    right = left + 1
+    columns = jnp.arange(xi_flat.shape[0])
+
+    t_left = ts[left]
+    t_right = ts[right]
+    y_left = ys[left, columns]
+    y_right = ys[right, columns]
+    weight = (xi_flat - t_left) / (t_right - t_left)
+    return ((1.0 - weight) * y_left + weight * y_right).reshape(-1, 1)
+
+@jax.jit
+def simulate_sir(xi: Array, ts: Array, ys: Array) -> Array:
+    """Evaluate paired SIR trajectories at continuous design times.
+
+    Small negative values from numerical SDE integration are clamped to the
+    physically valid infected-state boundary before likelihood preprocessing.
+    """
+    y = jnp.maximum(linear_interpolate_trajectories(xi, ts, ys), 0.0)
+    return y, jnp.mean(y), jnp.std(y)
+
+
+def collect_sufficient_sde_samples_prior(
+        N: int,
+        prior_samples: Array,
+        prior_log_probs: Array,
+        device: str,
+        prng_seq: PRNGKey,
+        ) -> Tuple[Array, Array, Array]:
+    '''
+    Collect sufficient samples from SDE simulator to use for training.
+
+    N: int, number of samples to collect
+    prior_samples: (num_samples, 2) array of prior samples
+    prior_log_prob: (num_samples, ) array of prior log probs
+    flow_params: hk.Params, parameters for the normalizing flow
+    x_obs_scale: (num_samples, ) array of x_obs_scale
+    xi_sim: (num_samples, ) array of xi_sim
+    device: str, device to run torch on
+    log_prob_fun: Callable, log prob function to use for SIR update
+    prng_seq: PRNGKey, random key for SIR update
+
+    Returns:
+    final_ys: (num_samples, ) array of final ys
+    post_samples: (num_samples, 2) array of posterior samples
+    post_log_probs: (num_samples, ) array of posterior log probs
+    '''
+    all_ys = jnp.zeros((100000, 0))
+    all_prior_samples = jnp.zeros((0, 2))
+    all_prior_log_probs = jnp.zeros((0,))
+
+    params_device = torch.tensor(np.asarray(prior_samples)).to(device)
+    params_log_probs_device = torch.tensor(np.asarray(prior_log_probs)).to(device)
+
+    while all_ys.shape[1] < N:
+        print("Generating initial SIR SDE training data...")
+        sde_dict = solve_sir_sdes(
+                    num_samples=N,
+                    device=device,
+                    grid=100000,
+                    save=False,
+                    savegrad=False,
+                    params=params_device,
+                    params_log_probs=params_log_probs_device,
+                    seed=next(prng_seq)
+                )
+
+        current_ys = sde_dict['ys']  # Get the actual data from your dictionary
+        current_ys = jnp.array(current_ys.numpy())
+        all_ys = jnp.concatenate((all_ys, current_ys), axis=1)  # Concatenate along the second dimension
+
+        current_prior_samples = jnp.array(sde_dict['prior_samples'].numpy())
+        all_prior_samples = jnp.concatenate((all_prior_samples, current_prior_samples), axis=0)
+
+        current_prior_log_probs = jnp.array(sde_dict['prior_log_probs'].numpy())
+        all_prior_log_probs = jnp.concatenate((all_prior_log_probs, current_prior_log_probs), axis=0)
+
+    # After the loop, 'all_ys' will contain successful samples
+    final_ys = all_ys[:, :N]
+    post_samples = all_prior_samples[:N]
+    post_log_probs = all_prior_log_probs[:N]
+
+    return final_ys, post_samples, post_log_probs
