@@ -33,7 +33,6 @@ from lfiax.utils.utils import run_mcmc, run_mcmc_smc, shuffle_samples, split_dat
 from lfiax.utils.sbi_losses import kl_sbc_loss_fn_general, kl_loss_fn_general
 from lfiax.utils.sir_utils import LossSmoother, reduce_on_plateau
 from lfiax.utils.update_funs import update_pce
-from lfiax.utils.design_baselines import select_baseline_design, validate_baseline_config
 
 
 from typing import (
@@ -105,14 +104,6 @@ class Workspace:
         self.device = self.cfg.experiment.device
         self.hpc = self.cfg.experiment.hpc
         self.debug = self.cfg.experiment.debug
-        baseline_cfg = self.cfg.get("baseline", {})
-        self.design_policy = baseline_cfg.get("design_policy", "optimized")
-        self.likelihood_objective = baseline_cfg.get("likelihood_objective", "infonce_lambda")
-        early_stopping_cfg = baseline_cfg.get("early_stopping", {})
-        self.baseline_early_stopping = early_stopping_cfg.get("enabled", True)
-        self.baseline_early_stopping_patience = int(early_stopping_cfg.get("patience", 10))
-        self.baseline_early_stopping_scale = float(early_stopping_cfg.get("scale", 1e-3))
-        validate_baseline_config(self.design_policy, self.likelihood_objective)
 
         if self.hpc:
             self.work_dir = "/pub/vzaballa/lfiax_data"
@@ -124,8 +115,6 @@ class Workspace:
             eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
             file_name = self.sir_type
             path_parts = [self.work_dir, "sir", file_name]
-            if self.design_policy != "optimized":
-                path_parts.extend([self.design_policy, self.likelihood_objective])
             path_parts.extend([str(cfg.seed), current_time_str])
             self.subdir = os.path.join(*path_parts)
             os.makedirs(self.subdir, exist_ok=True)
@@ -140,8 +129,6 @@ class Workspace:
             eig_lambda_str = str(cfg.optimization_params.eig_lambda).replace(".", "-")
             file_name = f"eig_lambda_{eig_lambda_str}"
             path_parts = [os.getcwd(), "sir", file_name]
-            if self.design_policy != "optimized":
-                path_parts.extend([self.design_policy, self.likelihood_objective])
             path_parts.extend([str(cfg.designs.num_xi), str(cfg.seed), current_time_str])
             self.subdir = os.path.join(*path_parts)
             os.makedirs(self.subdir, exist_ok=True)
@@ -507,126 +494,6 @@ class Workspace:
         else:
             raise ValueError(f"Xi optimizer type {self.xi_optimizer} not recognized.")
 
-        def _sir_total_log_prob(params: hk.Params, x: Array, theta: Array, xi: Array) -> Array:
-            if x.shape[1] == 1:
-                return self.log_prob_nodrop.apply(params, x, theta, xi)
-            conditional_lp = jax.vmap(self.log_prob_nodrop.apply, in_axes=(None, -1, None, -1))(
-                params, x[:, jnp.newaxis], theta, xi[:, jnp.newaxis]
-            )
-            return jnp.sum(conditional_lp, axis=0)
-
-        def _fixed_design_training_data(
-            current_x: Array,
-            current_theta: Array,
-            current_designs: Array,
-        ) -> Tuple[Array, Array, Array]:
-            if self.static_outputs_sbi is None:
-                return current_x, current_theta, current_designs
-            return (
-                jnp.concatenate([self.static_outputs_sbi[:self.N], current_x], axis=1),
-                current_theta,
-                jnp.concatenate([self.d[:self.N], current_designs], axis=1),
-            )
-
-        def _nle_loss_sir(
-            params: hk.Params,
-            prng_key: PRNGKey,
-            x: Array,
-            theta: Array,
-            xi: Array,
-        ) -> Tuple[Array, Array]:
-            x, theta, xi = shuffle_samples(prng_key, x, theta, xi)
-            conditional_lps = _sir_total_log_prob(params, x, theta, xi)
-            return -jnp.mean(conditional_lps), conditional_lps
-
-        def _fixed_design_eig_sir(
-            params: hk.Params,
-            prng_key: PRNGKey,
-            x: Array,
-            theta: Array,
-            xi: Array,
-        ) -> Tuple[Array, Array]:
-            conditional_lp = _sir_total_log_prob(params, x, theta, xi)
-
-            def scan_fun(carry, i):
-                contrastive_lps, theta_i = carry
-                theta_i = jnp.roll(theta_i, shift=1, axis=0)
-                contrastive_lp = _sir_total_log_prob(params, x, theta_i, xi)
-                contrastive_lps = jnp.logaddexp(contrastive_lps, contrastive_lp)
-                return (contrastive_lps, theta_i), i + 1
-
-            marginal_lp = jax.lax.scan(
-                scan_fun, (conditional_lp, theta), jnp.array(range(self.M))
-            )[0][0] - jnp.log(self.M + 1)
-            eig_terms = conditional_lp - marginal_lp
-            finite = jnp.isfinite(eig_terms)
-            eig = jnp.sum(jnp.where(finite, eig_terms, 0.0)) / jnp.maximum(jnp.sum(finite), 1)
-            return conditional_lp, eig
-
-        def update_fixed_nle_sir(
-            params: hk.Params,
-            prng_key: PRNGKey,
-            opt_state: OptState,
-            ema: optax.GradientTransformation,
-            ema_opt_state: OptState,
-            x: Array,
-            theta: Array,
-            xi: Array,
-        ) -> Tuple[hk.Params, OptState]:
-            (loss, conditional_lps), grads = jax.value_and_grad(
-                _nle_loss_sir, has_aux=True)(params, prng_key, x, theta, xi)
-            updates, new_opt_state = optimizer.update(grads, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            ema_params, new_ema_opt_state = ema.update(new_params, ema_opt_state)
-            return new_params, new_opt_state, loss, grads, conditional_lps, ema_params, new_ema_opt_state
-
-        def update_fixed_infonce_sir(
-            params: hk.Params,
-            prng_key: PRNGKey,
-            opt_state: OptState,
-            ema: optax.GradientTransformation,
-            ema_opt_state: OptState,
-            final_ys: Array,
-            sde_dict: dict,
-            theta: Array,
-            xi_value: Array,
-        ) -> Tuple[hk.Params, OptState]:
-            fixed_xi_params = {"xi_mu": xi_value}
-            (loss, (conditional_lps, eig, _, x_mean, x_std, d_sim, _)), grads = jax.value_and_grad(
-                lf_pce_design_dist_sir, argnums=0, has_aux=True)(
-                params,
-                fixed_xi_params,
-                prng_key,
-                final_ys,
-                jnp.array(sde_dict['ts'].numpy()),
-                theta,
-                self.static_outputs_sbi[:self.N] if self.static_outputs_sbi is not None else None,
-                self.d[:self.N] if self.d is not None else None,
-                likelihood_lp_fun,
-                N=self.N,
-                M=self.M,
-                lam=self.eig_lambda,
-                design_min=0.01,
-                design_max=100.,
-                use_design_dist=False,
-            )
-            updates, new_opt_state = optimizer.update(grads, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
-            ema_params, new_ema_opt_state = ema.update(new_params, ema_opt_state)
-            return (
-                new_params,
-                new_opt_state,
-                loss,
-                grads,
-                conditional_lps,
-                eig,
-                x_mean,
-                x_std,
-                d_sim,
-                ema_params,
-                new_ema_opt_state,
-            )
-
         # Initialize designs xi
         flow_params['xi_mu'] = jnp.array(self.xi_mu)
         flow_params['xi_stddev'] = jnp.array(self.xi_stddev)
@@ -667,7 +534,6 @@ class Workspace:
             lr=self.xi_lr_init,
         )
         learning_rate = self.xi_lr_init
-        is_baseline = self.design_policy != "optimized"
 
         # Import "true" SDE data type
         file_path = self.cfg.data.observations
@@ -689,33 +555,9 @@ class Workspace:
         for design_round in range(self.design_rounds):
             ################# Start Design Optimization #################
             # Initialize the optimizers for the next round of design optimization
-            selected_baseline_design = None
-            if is_baseline:
-                selected_baseline_design = jnp.asarray(select_baseline_design(
-                    self.design_policy,
-                    design_round,
-                    self.seed,
-                    design_min,
-                    design_max,
-                    shape=(1,),
-                ))
-                xi_params['xi_mu'] = selected_baseline_design
-                if norm_type == "inf":
-                    xi_params_scaled['xi_mu'] = jnp.divide(selected_baseline_design, scale_factor)
-                elif norm_type == "log":
-                    xi_params_scaled['xi_mu'] = jnp.log(selected_baseline_design)
-                elif norm_type == "ppf":
-                    xi_params_scaled['xi_mu'] = normalize_xi_to_gaussian(selected_baseline_design)
-                else:
-                    raise ValueError(f"Norm type {norm_type} not recognized.")
-                opt_state = optimizer.init(flow_params)
-            else:
-                opt_state = optimizer.init((flow_params, xi_params_scaled))
+            opt_state = optimizer.init((flow_params, xi_params_scaled))
             ema_opt_state = ema.init(flow_params)
             ema_params = flow_params
-            early_best_avg_eig = float("-inf")
-            early_bad_steps = 0
-            early_best_ema_params = ema_params
             # (Re)set data structs to keep track of best-seen xi_params
             eig_history = deque(maxlen=100)
             xi_mu_history = deque(maxlen=100)
@@ -743,7 +585,7 @@ class Workspace:
                 boed_theta_pool = posterior_theta_pool
                 boed_sde_pool = posterior_sde_pool
 
-            epig_active = self.epig_enabled and not is_baseline
+            epig_active = self.epig_enabled
             step_pool_size = self.epig_num_candidates if epig_active else self.N
             if step_pool_size > boed_theta_pool.shape[0]:
                 raise ValueError(
@@ -769,88 +611,43 @@ class Workspace:
                 theta_0 = boed_theta_pool[theta_indices]
                 final_ys_0 = boed_sde_pool[:, theta_indices]
 
-                if is_baseline:
-                    if self.likelihood_objective == "nle":
-                        d_sim = jnp.broadcast_to(selected_baseline_design, (self.N, 1))
-                        x_step, x_mean, x_std = simulate_sir(
-                            d_sim,
-                            jnp.array(sde_dict['ts'].numpy()),
-                            final_ys_0,
+                flow_params, xi_params_scaled, opt_state, loss, grads, xi_grads, \
+                    xi_updates, EIG, x_mean, x_std, d_sim, flow_norms, conditional_lps, ema_params, ema_opt_state, epig_diagnostics = update_pce(
+                        flow_params,
+                        xi_params_scaled,
+                        next(prng_seq),
+                        optimizer,
+                        opt_state,
+                        ema,
+                        ema_opt_state,
+                        final_ys_0,
+                        sde_dict,
+                        likelihood_lp_fun,
+                        N=self.N,
+                        M=self.M,
+                        theta_0=theta_0,
+                        lam=self.eig_lambda,
+                        opt_round=step,
+                        design_min=float(design_min),
+                        design_max=design_max,
+                        end_sigma=self.end_sigma,
+                        importance_sampling=self.importance_sampling,
+                        use_design_dist=self.use_design_dist,
+                        prev_data=self.static_outputs_sbi[theta_indices] if self.static_outputs_sbi is not None else None,
+                        prev_designs=self.d[theta_indices] if self.d is not None else None,
+                        epig_log_prob_fun=epig_log_prob_fun,
+                        epig_sample_fun=epig_sample_fun,
+                        epig_enabled=epig_active,
+                        epig_policy=self.epig_policy,
+                        epig_K=self.epig_K,
+                        epig_S=self.epig_S,
+                        epig_temperature=self.epig_temperature,
+                        epig_dropout_crn=self.epig_dropout_crn,
                         )
-                        x_train, theta_train, xi_train = _fixed_design_training_data(
-                            x_step, theta_0, d_sim)
-                        flow_params, opt_state, loss, grads, conditional_lps, ema_params, ema_opt_state = update_fixed_nle_sir(
-                            flow_params,
-                            next(prng_seq),
-                            opt_state,
-                            ema,
-                            ema_opt_state,
-                            x_train,
-                            theta_train,
-                            xi_train,
-                        )
-                        _, EIG = _fixed_design_eig_sir(
-                            flow_params,
-                            next(prng_seq),
-                            x_train,
-                            theta_train,
-                            xi_train,
-                        )
-                    else:
-                        flow_params, opt_state, loss, grads, conditional_lps, EIG, x_mean, x_std, d_sim, ema_params, ema_opt_state = update_fixed_infonce_sir(
-                            flow_params,
-                            next(prng_seq),
-                            opt_state,
-                            ema,
-                            ema_opt_state,
-                            final_ys_0,
-                            sde_dict,
-                            theta_0,
-                            selected_baseline_design,
-                        )
-                    xi_grads = {"xi_mu": jnp.array(0.0), "xi_stddev": jnp.array(0.0)}
-                    xi_updates = {"xi_mu": jnp.array(0.0), "xi_stddev": jnp.array(0.0)}
-                    flow_norms = optax.global_norm(grads)
-                else:
-                    # Optimize the designs using theta_0, flow_params, and xi_params
-                    flow_params, xi_params_scaled, opt_state, loss, grads, xi_grads, \
-                        xi_updates, EIG, x_mean, x_std, d_sim, flow_norms, conditional_lps, ema_params, ema_opt_state, epig_diagnostics = update_pce(
-                            flow_params,
-                            xi_params_scaled,
-                            next(prng_seq),
-                            optimizer,
-                            opt_state,
-                            ema,
-                            ema_opt_state,
-                            final_ys_0,
-                            sde_dict,
-                            likelihood_lp_fun,
-                            N=self.N,
-                            M=self.M,
-                            theta_0=theta_0,
-                            lam=self.eig_lambda,
-                            opt_round=step,
-                            design_min=float(design_min),
-                            design_max=design_max,
-                            end_sigma=self.end_sigma,
-                            importance_sampling=self.importance_sampling,
-                            use_design_dist=self.use_design_dist,
-                            prev_data=self.static_outputs_sbi[theta_indices] if self.static_outputs_sbi is not None else None,
-                            prev_designs=self.d[theta_indices] if self.d is not None else None,
-                            epig_log_prob_fun=epig_log_prob_fun,
-                            epig_sample_fun=epig_sample_fun,
-                            epig_enabled=epig_active,
-                            epig_policy=self.epig_policy,
-                            epig_K=self.epig_K,
-                            epig_S=self.epig_S,
-                            epig_temperature=self.epig_temperature,
-                            epig_dropout_crn=self.epig_dropout_crn,
-                            )
 
                 val_loss = -jnp.mean(conditional_lps)
-                should_stop_early = False
 
-                if (not is_baseline) and self.xi_scheduler == "Custom":
+                if self.xi_scheduler == "Custom":
                     # Using custom ReduceLROnPlateau scheduler
                     if step == 0:
                         rlrop_state = sch_init_fn(xi_params_scaled)
@@ -866,13 +663,13 @@ class Workspace:
                 else:
                     learning_rate = self.schedule
 
-                flow_grads = grads[0] if not is_baseline else grads
+                flow_grads = grads[0]
                 if check_for_nans(flow_grads):
                     print("Flow gradients contain NaNs. Resetting to EMA params.")
                     flow_params = ema_params
-                    opt_state = optimizer.init(flow_params if is_baseline else (ema_params, xi_params_scaled))
+                    opt_state = optimizer.init((ema_params, xi_params_scaled))
                     ema_opt_state = ema.init(flow_params)
-                if (not is_baseline) and check_for_nans(grads[1]):
+                if check_for_nans(grads[1]):
                     print("Xi gradients contain NaNs. Resetting to EMA params.")
                     # TODO: Make more configureable with the type of normalization chosen
                     xi_params['xi_mu'] = jnp.array(best_xi_mu_eig)
@@ -886,9 +683,7 @@ class Workspace:
                     opt_state = optimizer.init((ema_params, xi_params_scaled))
                     ema_opt_state = ema.init(flow_params)
 
-                if is_baseline:
-                    xi_params['xi_mu'] = selected_baseline_design
-                elif norm_type == "inf":
+                if norm_type == "inf":
                     # Setting bounds on the xi_mu values
                     max_bound = jnp.divide(design_max, scale_factor)-0.001
                     xi_params_scaled['xi_mu'] = jnp.clip(
@@ -933,27 +728,11 @@ class Workspace:
                     best_avg_eig = rolling_average_eig
                     best_xi_mu_eig = jnp.mean(np.array(xi_mu_history))
 
-                if is_baseline and self.baseline_early_stopping:
-                    best_avg_eig_float = float(jax.device_get(best_avg_eig))
-                    if best_avg_eig_float > early_best_avg_eig + self.baseline_early_stopping_scale:
-                        early_best_avg_eig = best_avg_eig_float
-                        early_bad_steps = 0
-                        early_best_ema_params = ema_params
-                    else:
-                        early_bad_steps += 1
-
-                    should_stop_early = early_bad_steps >= self.baseline_early_stopping_patience
 
                 run_time = time.time()-tic
                 xi_mu_value = float(jnp.squeeze(xi_params['xi_mu']))
                 xi_std_value = float(jnp.squeeze(xi_params['xi_stddev']))
                 xi_update_value = float(jnp.squeeze(xi_updates['xi_mu']))
-                early_bad_steps_log = early_bad_steps if is_baseline else ""
-                early_best_avg_eig_log = (
-                    early_best_avg_eig
-                    if is_baseline and np.isfinite(early_best_avg_eig)
-                    else ""
-                )
                 print(f"STEP: {step:5d}; Xi Mu: {xi_mu_value:.4f}; Xi Stddev: {xi_std_value:.4f}; Xi mu Updates: {xi_update_value:.4e}; Loss: {loss:.4f}; EIG: {EIG:.4f}; Run time: {run_time:.4f}, Flow Grad Norm: {flow_norms:.4f}, Val Loss: {val_loss:.4f}")
                 if epig_active:
                     print(
@@ -986,10 +765,6 @@ class Workspace:
                     'seed': self.seed,
                     'lambda': self.eig_lambda,
                     'design_round': design_round,
-                    'design_policy': self.design_policy,
-                    'likelihood_objective': self.likelihood_objective,
-                    'early_stopping_bad_steps': early_bad_steps_log,
-                    'early_stopping_best_avg_eig': early_best_avg_eig_log,
                 })
                 logf.flush()
 
@@ -1010,15 +785,8 @@ class Workspace:
                         f"boed_{design_round}/learning_rate": learning_rate,
                         f"boed_{design_round}/flow grad norms": flow_norms,
                         f"boed_{design_round}/val_loss": val_loss,
-                        f"boed_{design_round}/design_policy": self.design_policy,
-                        f"boed_{design_round}/likelihood_objective": self.likelihood_objective,
                         step_metric_name: step,
                         }
-                    if is_baseline:
-                        wandb_payload.update({
-                            f"boed_{design_round}/early_stopping_bad_steps": early_bad_steps,
-                            f"boed_{design_round}/early_stopping_best_avg_eig": early_best_avg_eig,
-                        })
                     if epig_active:
                         wandb_payload.update({
                             f"boed_{design_round}/epig/policy": self.epig_policy,
@@ -1040,14 +808,6 @@ class Workspace:
                         })
                     wandb.log(wandb_payload)
 
-                if should_stop_early:
-                    print(
-                        f"Early stopping baseline likelihood training at step {step}; "
-                        f"best avg EIG {early_best_avg_eig:.6f}"
-                    )
-                    ema_params = early_best_ema_params
-                    flow_params = early_best_ema_params
-                    break
 
             ############# Finished design optimization & reset to best checkpointed params #############
             xi_params['xi_mu'] = jnp.array(best_xi_mu_eig)
@@ -1373,8 +1133,6 @@ class Workspace:
                            "best_xi_mu_eig": jax.device_get(best_xi_mu_eig),
                            "final_ys": jax.device_get(final_ys_0),
                            "sde_ts": jax.device_get(sde_dict['ts']),
-                           "design_policy": self.design_policy,
-                           "likelihood_objective": self.likelihood_objective,
                            'LC2ST_statistic': statistic,
                            'LC2ST_p_value': p_value,
                            'LC2ST_reject': reject,}
@@ -1473,8 +1231,6 @@ class Workspace:
                 'post_samples': jax.device_get(posterior_theta_pool),
                 'post_log_probs': jax.device_get(posterior_log_prob_pool),
                 'median_distances': jax.device_get(median_distances),
-                'design_policy': self.design_policy,
-                'likelihood_objective': self.likelihood_objective,
             }
             with open(f"{self.subdir}/{self.cfg.experiment.save_name}.pkl", "wb") as f:
                 pkl.dump(objects, f)
@@ -1493,17 +1249,12 @@ class Workspace:
             'seed',
             'lambda',
             'design_round',
-            'design_policy',
-            'likelihood_objective',
-            'early_stopping_bad_steps',
-            'early_stopping_best_avg_eig',
         ]
         writer = csv.DictWriter(logf, fieldnames=fieldnames)
         if os.stat(path).st_size == 0:
             writer.writeheader()
             logf.flush()
         return logf, writer
-
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config_sir")

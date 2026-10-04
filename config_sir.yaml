@@ -25,14 +25,6 @@ wandb:
   entity: null
   project: lfiax-sir-epig
 
-baseline:
-  design_policy: optimized      # optimized | random | sobol
-  likelihood_objective: infonce_lambda  # infonce_lambda | nle
-  early_stopping:
-    enabled: true
-    patience: 50
-    scale: 1e-3
-
 contrastive_sampling:
   M: 255  # Note: due to rolling window, M must be less than N
   N: 256 # LF-PCE positive/contrastive batch size
