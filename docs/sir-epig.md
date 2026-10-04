@@ -82,11 +82,9 @@ also writes logs under `data/`. Generated data and outputs are ignored by Git.
 To log to your W&B account, set `wandb.use_wandb=true wandb.entity=YOUR_ENTITY`.
 
 The port includes the design-distribution LF-PCE objective and its EPIG helpers.
-Unused SBI/SBC losses, ACE updates, design importance sampling, and the abandoned
-posterior-flow/refinement configuration are omitted.
 
 Installation was checked with `pip install -e '.[sir]'` in a fresh Python 3.11
 environment on Apple Silicon macOS, followed by `pip check`, SIR imports, Hydra
 config loading, the data-generator CLI, and one synthetic design-distribution
-plus EPIG update. Linux/CUDA installation and full
-experiment results have not been validated. This release is intended for exploration.
+plus EPIG update. Linux/CUDA installation and full experiment results have not
+been validated. This release is intended for exploration.
