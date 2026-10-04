@@ -1,6 +1,6 @@
 """Makes Neural Spline Flow normalizing flow."""
 
-from typing import Sequence
+from typing import Sequence, Optional
 
 import jax
 import jax.numpy as jnp
@@ -15,10 +15,7 @@ from lfiax.bijectors.standardizing_conditional import StandardizingBijector
 
 from lfiax.distributions.transformed_conditional import ConditionalTransformed
 
-from lfiax.nets.scalar_conditioners import (
-    scalar_conditioner_mlp,
-    conditional_scalar_conditioner_mlp,
-)
+from lfiax.nets.scalar_conditioners import scalar_conditioner_mlp, conditional_scalar_conditioner_mlp
 from lfiax.nets.conditioners import conditioner_mlp, conditional_conditioner_mlp
 
 
@@ -35,19 +32,37 @@ def make_nsf(
     use_resnet: bool = True,
     conditional: bool = True,
     base_dist: str = "gaussian",
+    activation: str = "relu",
+    mu: Optional[np.ndarray] = None,
+    sigma: Optional[np.ndarray] = None,
+    dropout_rate: float = 0.0,
+    spline_range_min: float = 0.0,
+    spline_range_max: float = 1.0,
 ) -> distrax.Transformed:
     """Creates a neural spline flow (nsf) model using conditional or non-conditional
     bijectors and distributions given whether specified. Heavily inspired/copied off
     of the original nsf model in the distrax repo."""
+    if spline_range_min >= spline_range_max:
+        raise ValueError(
+            "spline_range_min must be less than spline_range_max; "
+            f"got {spline_range_min} and {spline_range_max}."
+        )
+
     # Alternating binary mask.
     mask = jnp.arange(0, np.prod(event_shape)) % 2
     mask = jnp.reshape(mask, event_shape)
     mask = mask.astype(bool)
     if event_shape == (1,):
-        mask = jnp.array([1]).astype(bool)
+        # A scalar coupling has no complementary coordinates to leave fixed.
+        # Transform it using parameters conditioned only on theta and xi.
+        mask = jnp.array([False])
 
     def bijector_fn(params: Array):
-        return distrax.RationalQuadraticSpline(params, range_min=0.0, range_max=1.0)
+        return distrax.RationalQuadraticSpline(
+            params,
+            range_min=spline_range_min,
+            range_max=spline_range_max,
+        )
 
     # Number of parameters for the rational-quadratic spline:
     # - `num_bins` bin widths
@@ -66,6 +81,8 @@ def make_nsf(
                     num_bijector_params,
                     standardize_theta,
                     use_resnet,
+                    activation,
+                    dropout_rate
                 )
             else:
                 return scalar_conditioner_mlp(
@@ -82,6 +99,8 @@ def make_nsf(
                     num_bijector_params,
                     standardize_theta,
                     use_resnet,
+                    activation,
+                    dropout_rate,
                 )
             else:
                 return conditioner_mlp(
@@ -113,7 +132,9 @@ def make_nsf(
     else:
         for _ in range(num_layers):
             layer = distrax.MaskedCoupling(
-                mask=mask, bijector=bijector_fn, conditioner=create_conditioner()
+                mask=mask,
+                bijector=bijector_fn,
+                conditioner=create_conditioner()
             )
             layers.append(layer)
             # Flip the mask after each layer as long as event is non-scalar.
@@ -124,14 +145,17 @@ def make_nsf(
         flow = distrax.Inverse(distrax.Chain(layers))
 
     if base_dist == "gaussian":
-        mu = jnp.zeros(event_shape)
-        sigma = jnp.ones(event_shape)
+        if mu is None:
+            mu = jnp.zeros(event_shape)
+        if sigma is None:
+            sigma = jnp.ones(event_shape)
         base_distribution = distrax.Independent(
             distrax.MultivariateNormalDiag(mu, sigma)
         )
     elif base_dist == "uniform":
         base_distribution = distrax.Independent(
-            distrax.Uniform(low=jnp.zeros(event_shape), high=jnp.ones(event_shape)),
+            distrax.Uniform(low=jnp.zeros(event_shape),
+                            high=jnp.ones(event_shape)),
             reinterpreted_batch_ndims=len(event_shape),
         )
     else:

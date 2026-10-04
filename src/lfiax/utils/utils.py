@@ -1,20 +1,30 @@
+from functools import partial
+
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import jax.random as jrandom
-from sklearn.model_selection import KFold
+import blackjax
+import blackjax.smc.resampling as resampling
+from blackjax.smc import extend_params
+import tensorflow_probability.substrates.jax as tfp
+import haiku as hk
+import distrax
+from lfiax.flows.nsf import make_nsf
+# from .fast_soft_sort.jax_ops import soft_sort
+
 import matplotlib.pyplot as plt
-from scipy.stats import gaussian_kde
 
 from typing import List, Optional, Tuple, Union
 
-import haiku as hk
-import numpy as np
-from scipy.stats import binom
 import tensorflow_datasets as tfds
 
 from typing import (
     Any,
+    Callable,
+    Sequence,
+    Union,
     Iterator,
     Mapping,
     Optional,
@@ -24,6 +34,11 @@ from typing import (
 Array = jnp.ndarray
 Batch = Mapping[str, np.ndarray]
 PRNGKey = Array
+
+
+# ------------ training helpers ------------
+from sklearn.model_selection import KFold
+from scipy.stats import gaussian_kde, binom
 
 
 def plot_contour_prior_posterior(
@@ -85,7 +100,6 @@ def plot_contour_prior_posterior(
     ax2.set_title("Posterior Contour Density")
     ax2.set_xlabel("\u03B8\u2081")
     ax2.set_ylabel("\u03B8\u2080")
-
 
 def plot_prior_posteriors(
     prior_samples,
@@ -177,7 +191,6 @@ def plot_prior_posteriors(
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=900, bbox_inches="tight")
 
-
 def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename):
     # Create a figure with two subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -207,10 +220,6 @@ def plot_prior_posterior(prior_samples, posterior_samples, true_theta, filename)
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=300, bbox_inches="tight")
 
-    # Display the figure
-    # plt.show()
-
-
 def save_posterior_marginal(posterior_samples_marginal, filename):
     # Create a figure
     fig = plt.figure(figsize=(8, 6))
@@ -226,11 +235,9 @@ def save_posterior_marginal(posterior_samples_marginal, filename):
     # Save the plot as a PNG file with the provided filename
     plt.savefig(filename, dpi=300, bbox_inches="tight")
 
-
 @jax.jit
 def inverse_standard_scale(scaled_x, shift, scale):
     return (scaled_x * scale) + shift
-
 
 @jax.jit
 def standard_scale(x):
@@ -247,7 +254,6 @@ def standard_scale(x):
     scaled_x = jax.lax.cond(x.shape[-1] == 1, single_column_fn, multi_column_fn, x)
     return scaled_x
 
-
 def jax_lexpand(A, *dimensions):
     """Expand tensor, adding new dimensions on left."""
     if jnp.isscalar(A):
@@ -257,7 +263,6 @@ def jax_lexpand(A, *dimensions):
     A = A[jnp.newaxis, ...]
     A = jnp.broadcast_to(A, shape)
     return A
-
 
 def sir_update(
     log_likelihood_fn,
@@ -292,7 +297,6 @@ def sir_update(
 
     return posterior_samples, posterior_weights
 
-
 def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     """Helper function for loading and preparing tfds splits."""
     ds = split
@@ -301,7 +305,6 @@ def load_dataset(split: tfds.Split, batch_size: int) -> Iterator[Batch]:
     ds = ds.prefetch(buffer_size=1000)
     ds = ds.repeat()
     return iter(tfds.as_numpy(ds))
-
 
 def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Array:
     """[Legacy] Helper function for preparing tfds splits for use in fliax."""
@@ -314,7 +317,6 @@ def prepare_tf_dataset(batch: Batch, prng_key: Optional[PRNGKey] = None) -> Arra
     d = cond_data[:, -len_x:-len_xi]
     xi = cond_data[:, -len_xi:]
     return x, theta, d, xi
-
 
 def sbc(
     prior,
@@ -371,7 +373,6 @@ def sbc(
 
     return sbc_histogram
 
-
 def ks_test(sample1, sample2):
     """Two-sample KS-test."""
     sample1_sorted = jnp.sort(sample1)
@@ -395,7 +396,6 @@ def ks_test(sample1, sample2):
     p_value = np.exp(-2 * n * ks_statistic**2)
 
     return ks_statistic, p_value
-
 
 def c2st_accuracy(
     ranks: jnp.ndarray, uniforms: jnp.ndarray, num_folds: int = 5
@@ -460,7 +460,6 @@ def c2st_accuracy(
 
     return jnp.mean(jnp.array(accuracy_scores))
 
-
 def expected_coverage_probability(sbc_ranks: jnp.ndarray, alpha: float) -> float:
     """
     Calculate the Expected Coverage Probability (ECP) for a given value of alpha.
@@ -476,3 +475,355 @@ def expected_coverage_probability(sbc_ranks: jnp.ndarray, alpha: float) -> float
     num_ranks_exceeding_alpha = jnp.sum(sbc_ranks / num_simulations >= alpha)
     ecp = num_ranks_exceeding_alpha / num_simulations
     return ecp
+
+# SIR and EPIG experiment helpers.
+
+@jax.jit
+def shuffle_samples(key, x, theta, xi):
+    num_samples = x.shape[0]
+    shuffled_indices = jrandom.permutation(key, num_samples)
+    return x[shuffled_indices], theta[shuffled_indices], xi[shuffled_indices]
+
+def split_data_for_validation_jax(x_sbi, thetas_sbi, sbi_d, prng_key, validation_fraction=0.1):
+    """
+    Splits the data into training and validation sets using JAX.
+
+    Parameters:
+    - x_sbi: array-like, shape (n_samples, ...)
+    - thetas_sbi: array-like, shape (n_samples, ...)
+    - sbi_d: array-like, shape (n_samples, ...)
+    - prng_key: JAX PRNGKey for random shuffling
+    - validation_fraction: float, fraction of data to use for validation (default 0.1)
+
+    Returns:
+    - x_sbi: array-like, training data (90% of original x_sbi)
+    - thetas_sbi: array-like, training data (90% of original thetas_sbi)
+    - sbi_d: array-like, training data (90% of original sbi_d)
+    - x_sbi_val: array-like, validation data (10% of original x_sbi)
+    - thetas_sbi_val: array-like, validation data (10% of original thetas_sbi)
+    - sbi_d_val: array-like, validation data (10% of original sbi_d)
+    """
+    # Get the number of samples
+    n_samples = x_sbi.shape[0]
+
+    # Create shuffled indices using JAX
+    indices = jnp.arange(n_samples)
+    prng_key, subkey = jrandom.split(prng_key)
+    shuffled_indices = jrandom.permutation(subkey, indices)
+
+    # Determine the split index
+    split_idx = int(n_samples * (1 - validation_fraction))
+
+    # Split indices into training and validation
+    train_indices = shuffled_indices[:split_idx]
+    val_indices = shuffled_indices[split_idx:]
+
+    # Split the data accordingly
+    x_sbi_train = x_sbi[train_indices]
+    thetas_sbi_train = thetas_sbi[train_indices]
+    sbi_d_train = sbi_d[train_indices]
+
+    x_sbi_val = x_sbi[val_indices]
+    thetas_sbi_val = thetas_sbi[val_indices]
+    sbi_d_val = sbi_d[val_indices]
+
+    # Overwrite the input variables with the training data
+    x_sbi = x_sbi_train
+    thetas_sbi = thetas_sbi_train
+    sbi_d = sbi_d_train
+
+    return x_sbi, thetas_sbi, sbi_d, x_sbi_val, thetas_sbi_val, sbi_d_val
+
+
+
+
+
+@jax.custom_vjp
+def ste_hard_tanh(x):
+    return jnp.where(x > 0, 1.0, 0.0)
+
+
+
+
+
+def get_ranks_jax_refactored(model, theta, x, prior_samples, prior_lps):
+    """Compute the rank-based SBC calibration error.
+
+    model: the posterior log_prob function
+    theta: thetas from the batch (true values)
+    x: observations from the batch
+    prior_samples: pre-sampled prior values
+    prior_lps: log probabilities of the prior samples
+    """
+    # Compute the log probabilities of the batch data under the current posterior model
+    logq_o = model(theta, x)
+
+    # Compute log probabilities for the pre-sampled priors
+    def evaluate_prior_for_x(single_x):
+        x_broadcasted = jnp.broadcast_to(single_x, (prior_samples.shape[0], single_x.shape[0]))
+        return model(prior_samples, x_broadcasted)
+
+    logq_n = jax.vmap(evaluate_prior_for_x, in_axes=0)(x)
+
+    # Rankings calculation using STE hard tanh
+    rankings = ste_hard_tanh(logq_o[:, None] - logq_n)
+
+    # Calculate SBC result using logsumexp for stability
+    res = jax.nn.logsumexp((logq_n - prior_lps) + rankings, axis=1) - \
+          jax.nn.logsumexp(logq_n - prior_lps, axis=1)
+
+    return res
+
+def get_coverage_jax(ranks):
+    # TODO: Double-check this. Might be flipped if the rankings are flipped.
+    alpha = soft_sort(ranks[None, :])
+    levels = jnp.linspace(0.0, 1.0, alpha.shape[-1] + 2)[1:-1]
+    return levels, jnp.flip(alpha, axis=0)
+
+def get_calibration_error_jax(
+        model, theta, x, prior_samples, prior_lps, calibration=1):
+    """
+    model: posterior model log_prob evaluation. Essentially the likelihood.
+    x: observed data points (don't need)
+    theta: originally-generated thetas from the model using observed values. (just
+      posterior samples for VI posterior).
+    prior: prior that you can sample and assess lp from.
+    n_samples: ?
+    calibration: whether to do
+    """
+    ranks = get_ranks_jax_refactored(
+        model, theta, x, prior_samples, prior_lps)
+    coverage, expected = get_coverage_jax(ranks)
+    if calibration == 0:
+        return jnp.mean(jnp.square(jax.nn.relu(expected - coverage)))
+    elif calibration == 1:
+        return jnp.mean(jnp.square(coverage - expected))
+    else:
+        return jnp.mean(
+            jnp.square(
+                (1 - calibration) * jax.nn.relu(expected - coverage)
+                + calibration * (coverage - expected)
+            )
+        )
+
+
+
+
+
+@jax.jit
+def prior_to_standard_normal(theta):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2  # Covariance matrix
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))  # Standard deviations [0.5, 0.5]
+    z = (jnp.log(theta) - theta_loc) / std_devs
+    return z
+
+@jax.jit
+def prior_lp_logdetjac(z):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))
+    log_theta = z * std_devs + theta_loc
+    theta = jnp.exp(log_theta)
+    logdetjac = jnp.sum(jnp.log(std_devs)) + jnp.sum(jnp.log(theta))
+    return logdetjac.reshape(-1, 1)
+
+@jax.jit
+def standard_normal_to_prior(z):
+    theta_loc = jnp.log(jnp.array([0.5, 0.1]))
+    theta_covmat = jnp.eye(2) * 0.5 ** 2  # Covariance matrix
+    std_devs = jnp.sqrt(jnp.diag(theta_covmat))  # Standard deviations [0.5, 0.5]
+    # Inverse transformation
+    log_theta = z * std_devs + theta_loc
+    theta = jnp.exp(log_theta)
+    return theta
+
+def run_mcmc(prng_seq, mcmc_posterior, theta_0, num_adapt_steps, num_mcmc_samples):
+    """
+    Runs MCMC using the NUTS algorithm provided by the BlackJAX library.
+
+    Parameters:
+    prng_seq (iterable): Pseudo-random number generator sequence.
+    mcmc_posterior (callable): Function that calculates the proportional posterior log probability.
+    theta_0 (np.ndarray): Initial values for the theta parameters.
+    num_adapt_steps (int): Number of steps to use for the window adaptation during warmup.
+    num_mcmc_samples (int): Number of MCMC samples to generate.
+
+    Returns:
+    np.ndarray: Array of MCMC samples.
+    """
+    rng_key = prng_seq
+    initial_position = prior_to_standard_normal(theta_0.mean(axis=0))[None, :]
+
+    # Warmup phase with window adaptation
+    warmup = blackjax.window_adaptation(blackjax.nuts, mcmc_posterior)
+    rng_key, warmup_key, sample_key = jrandom.split(rng_key, 3)
+    (state, parameters), _ = warmup.run(warmup_key, initial_position, num_steps=num_adapt_steps)
+
+    # Define the NUTS kernel using the adapted parameters
+    kernel = blackjax.nuts(mcmc_posterior, **parameters).step
+
+    # Sampling loop
+    def inference_loop(rng_key, kernel, initial_state, num_samples):
+        @jax.jit
+        def one_step(state, rng_key):
+            state, _ = kernel(rng_key, state)
+            return state, state
+
+        keys = jrandom.split(rng_key, num_samples)
+        _, states = jax.lax.scan(one_step, initial_state, keys)
+        return states
+
+    states = inference_loop(sample_key, kernel, state, num_mcmc_samples)
+    mcmc_samples = states.position.squeeze()
+
+    return standard_normal_to_prior(mcmc_samples), states.logdensity
+
+def smc_inference_loop(rng_key, smc_kernel, initial_state):
+    """Run the temepered SMC algorithm.
+
+    We run the adaptive algorithm until the tempering parameter lambda reaches the value
+    lambda=1.
+    """
+    def cond(carry):
+        i, state, _k = carry
+        return state.lmbda < 1
+
+    def one_step(carry):
+        i, state, k = carry
+        k, subk = jrandom.split(k, 2)
+        state, _ = smc_kernel(subk, state)
+        return i + 1, state, k
+
+    n_iter, final_state, _ = jax.lax.while_loop(
+        cond, one_step, (0, initial_state, rng_key)
+    )
+
+    return n_iter, final_state
+
+def run_mcmc_smc(prng_seq, prior_lp, loglikelihood, mcmc_posterior, theta_0, num_adapt_steps, num_mcmc_samples):
+    """
+    Runs MCMC using the SMC algorithm provided by the BlackJAX library.
+
+    Parameters:
+    prng_seq (iterable): Pseudo-random number generator sequence.
+    mcmc_posterior (callable): Function that calculates the posterior log probability.
+    theta_0 (np.ndarray): Initial values for the theta parameters.
+    num_adapt_steps (int): Number of steps to use for the window adaptation during warmup.
+    num_mcmc_samples (int): Number of MCMC samples to generate.
+
+    Returns:
+    np.ndarray: Array of MCMC samples.
+    """
+    rng_key = prng_seq
+    initial_position = prior_to_standard_normal(theta_0.mean(axis=0))[None, :]
+
+    theta_dim = theta_0.shape[-1]
+    warmup = blackjax.window_adaptation(blackjax.nuts, mcmc_posterior)
+    rng_key, warmup_key, sample_key = jrandom.split(rng_key, 3)
+    initial_position = prior_to_standard_normal(theta_0.mean(axis=0))[None, :]
+    (_, parameters), _ = warmup.run(warmup_key, initial_position, num_steps=1_000)
+
+    # HMC parameters
+    # inv_mass_matrix = jnp.ones(theta_dim).squeeze()  # Identity mass matrix
+    step_size = float(parameters["step_size"])
+    inv_mass_matrix = parameters["inverse_mass_matrix"]
+
+    hmc_parameters = dict(
+        step_size=step_size, inverse_mass_matrix=inv_mass_matrix, num_integration_steps=1
+    )
+
+    # Set up the tempered SMC algorithm
+    tempered = blackjax.adaptive_tempered_smc(
+        prior_lp,
+        loglikelihood,
+        blackjax.hmc.build_kernel(),
+        blackjax.hmc.init,
+        # extend_params(num_mcmc_samples, hmc_parameters),
+        extend_params(hmc_parameters),
+        resampling.systematic,
+        0.5,
+        num_mcmc_steps=1
+    )
+
+    # Initialize particles
+    rng_key, init_key, sample_key = jrandom.split(rng_key, 3)
+    initial_particles = jrandom.normal(
+        init_key,
+        (num_mcmc_samples, theta_dim)
+    )
+    initial_smc_state = tempered.init(initial_particles)
+
+    # Run the SMC inference loop
+    n_iter, smc_samples = smc_inference_loop(
+        sample_key, tempered.step, initial_smc_state)
+
+    lps = smc_samples.weights
+    smc_samples = np.array(jax.tree_util.tree_leaves(smc_samples.particles)[0])
+
+    # Return samples and log weights
+    return standard_normal_to_prior(smc_samples), lps
+
+
+
+
+
+
+
+def create_lognormal_to_gaussian_bijectors(loc, scale_diag):
+    log_bijector = tfp.bijectors.Log()
+    scale_bijectors = [tfp.bijectors.Scale(scale=1.0 / jnp.sqrt(s)) for s in scale_diag]
+    shift_bijectors = [distrax.Shift(shift=0) for m in loc]
+    per_dim_bijectors = [distrax.Chain([shift, scale]) for shift, scale in zip(shift_bijectors, scale_bijectors)]
+    bijector_chain = distrax.Block(distrax.Chain(per_dim_bijectors + [log_bijector]), ndims=1)
+    return bijector_chain
+
+
+def sir_update_prod_likelihood_bespoke(
+        log_likelihood_fn,
+        prior_samples,
+        prior_log_probs,
+        prng_key,
+        likelihood_params,
+        x_obs,
+        xi,
+        x_obs_vmap_axis=0,
+        xi_vmap_axis=0,
+        **kwargs):
+    """
+    The kwargs is for params_dict that is passed in recursive rejection sampling. Not used,
+    but accepted.
+    """
+    log_prob_fun = lambda params, x, theta, xi: log_likelihood_fn.apply(
+                params, x, theta, xi)
+
+    log_likelihoods = jax.vmap(log_prob_fun, in_axes=(None, x_obs_vmap_axis, None, xi_vmap_axis))(
+                    likelihood_params,
+                    x_obs,
+                    prior_samples,
+                    xi)
+
+    # Product of each likelihood for each data point
+    log_likelihoods = jnp.sum(log_likelihoods, axis=0)
+
+    # Update the importance weights
+    new_log_weights = log_likelihoods
+
+    # Normalize the weights
+    max_log_weight = jnp.max(new_log_weights)
+    log_weights_shifted = new_log_weights - max_log_weight
+    unnormalized_weights = jnp.exp(log_weights_shifted)
+
+    # Resample with the updated weights
+    posterior_weights = unnormalized_weights / jnp.sum(unnormalized_weights)
+
+    posterior_samples = jrandom.choice(
+        prng_key,
+        prior_samples,
+        shape=(len(prior_samples),),
+        replace=True,
+        p=posterior_weights)
+
+    return posterior_samples, new_log_weights
+
+

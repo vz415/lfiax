@@ -171,3 +171,9 @@ dmypy.json
 
 # pycache
 *__pycache__/
+# Generated SIR data and experiment outputs
+sde_data/
+sir/
+*.pkl
+*.pt
+wandb/
