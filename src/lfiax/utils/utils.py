@@ -12,7 +12,7 @@ import tensorflow_probability.substrates.jax as tfp
 import haiku as hk
 import distrax
 from lfiax.flows.nsf import make_nsf
-# from .fast_soft_sort.jax_ops import soft_sort
+from .fast_soft_sort.jax_ops import soft_sort
 
 import matplotlib.pyplot as plt
 
@@ -535,16 +535,23 @@ def split_data_for_validation_jax(x_sbi, thetas_sbi, sbi_d, prng_key, validation
     return x_sbi, thetas_sbi, sbi_d, x_sbi_val, thetas_sbi_val, sbi_d_val
 
 
-
-
-
 @jax.custom_vjp
 def ste_hard_tanh(x):
     return jnp.where(x > 0, 1.0, 0.0)
 
 
+def ste_hard_tanh_fwd(x):
+    # Forward pass returns the primal output and an empty tuple for residuals
+    primal_out = jnp.where(x > 0, 1.0, 0.0)
+    residuals = ()  # No residuals needed in this case
+    return primal_out, residuals
 
+def ste_hard_tanh_bwd(residuals, tangents):
+    # Backward pass returns the gradient with respect to the input
+    grad_x = jax.nn.hard_tanh(tangents)
+    return (grad_x,)
 
+ste_hard_tanh.defvjp(ste_hard_tanh_fwd, ste_hard_tanh_bwd)
 
 def get_ranks_jax_refactored(model, theta, x, prior_samples, prior_lps):
     """Compute the rank-based SBC calibration error.
@@ -605,9 +612,6 @@ def get_calibration_error_jax(
                 + calibration * (coverage - expected)
             )
         )
-
-
-
 
 
 @jax.jit
@@ -765,11 +769,6 @@ def run_mcmc_smc(prng_seq, prior_lp, loglikelihood, mcmc_posterior, theta_0, num
     return standard_normal_to_prior(smc_samples), lps
 
 
-
-
-
-
-
 def create_lognormal_to_gaussian_bijectors(loc, scale_diag):
     log_bijector = tfp.bijectors.Log()
     scale_bijectors = [tfp.bijectors.Scale(scale=1.0 / jnp.sqrt(s)) for s in scale_diag]
@@ -825,5 +824,3 @@ def sir_update_prod_likelihood_bespoke(
         p=posterior_weights)
 
     return posterior_samples, new_log_weights
-
-

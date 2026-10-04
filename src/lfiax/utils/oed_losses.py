@@ -22,7 +22,6 @@ Array = jnp.ndarray
 PRNGKey = Array
 
 
-
 @jax.jit
 def pairwise_distances(points):
     """
@@ -413,7 +412,6 @@ def shuffle_samples(key, x, theta, xi):
     num_samples = x.shape[0]
     shuffled_indices = jax.random.permutation(key, num_samples)
     return x[shuffled_indices], theta[shuffled_indices], xi[shuffled_indices]
-
 
 
 @partial(
@@ -983,4 +981,3 @@ def lf_epig_scan(
     if return_diagnostics:
         return -scores, scores, diagnostics
     return -scores, scores
-

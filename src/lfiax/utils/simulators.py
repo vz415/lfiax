@@ -303,8 +303,6 @@ def sim_data(d: Array, num_samples: Array, key: PRNGKey):
 # SIR and EPIG experiment helpers.
 
 
-
-
 def sample_lognormal_with_log_probs(seed, num_samples):
     theta_loc = jnp.log(jnp.array([0.5, 0.1]))
     theta_covmat = jnp.eye(2) * 0.5 ** 2
@@ -357,7 +355,6 @@ def simulate_sir(xi: Array, ts: Array, ys: Array) -> Array:
     """
     y = jnp.maximum(linear_interpolate_trajectories(xi, ts, ys), 0.0)
     return y, jnp.mean(y), jnp.std(y)
-
 
 
 def collect_sufficient_sde_samples_prior(
